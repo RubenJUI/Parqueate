@@ -1,4 +1,4 @@
-# MiCupo
+# Parqueate
 
 Sistema para gestionar la entrada y salida de vehículos del Parqueadero **Autos Colombia** (Medellín), que presta su servicio por mensualidad.
 
