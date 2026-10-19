@@ -1,12 +1,39 @@
 # PARQUEATE
 
-Interfaz de operación para un parqueadero: control de entradas y salidas, ocupación de celdas, clientes, mensualidades y configuración. Actualmente es un prototipo frontend; no tiene API, autenticación real ni persistencia.
+Prototipo frontend para apoyar la operación del parqueadero Autos Colombia, en Medellín. La aplicación presenta flujos de entradas y salidas, ocupación, historial, clientes, mensualidades y configuración. Todavía no tiene API, autenticación real ni persistencia.
 
 ## Alcance funcional de referencia
 
-El README preexistente del repositorio remoto define como alcance prioritario la entrada y salida de vehículos: validación por placa, mensualidad y doble ingreso; asignación de celda; liberación al salir; consulta de ocupación e historial y captura de novedades. Indica una capacidad de 70 celdas para carros y 10 para motos, y cupo garantizado para usuarios con mensualidad vigente. Deja fuera de esa iteración los pagos, el alta de usuarios y la administración de celdas. La interfaz puede mostrar otras pantallas que todavía son solo prototipo.
+El alcance prioritario descrito en el repositorio es gestionar entrada y salida de vehículos:
 
-Las reglas y las decisiones aún por confirmar están en [docs/reglas-de-negocio.md](./docs/reglas-de-negocio.md).
+- Registrar entradas por placa y asignar una celda disponible del tipo de vehículo.
+- Validar vehículo registrado, mensualidad vigente y ausencia de otro ingreso abierto.
+- Registrar salidas y liberar la celda.
+- Consultar vehículos dentro, ocupación e historial, y registrar novedades.
+
+Quedan fuera de esa iteración la gestión de pagos, el registro de usuarios y la administración de celdas, aunque existan pantallas de muestra para algunos de esos flujos.
+
+## Reglas principales de referencia
+
+| Regla | Descripción |
+| --- | --- |
+| Capacidad | 80 espacios: 70 para carros y 10 para motos. |
+| Tipo de celda | Las celdas de moto son solo para motos y las de carro solo para carros. |
+| Vigencia | 30 días calendario contando el día del pago; vence en la fecha de pago + 29 días. |
+| Cupo | El requisito de referencia indica cupo garantizado para cada usuario con mensualidad vigente. |
+| Doble ingreso | Un vehículo con una entrada abierta no puede volver a ingresar. |
+
+Ejemplo: si el pago se hizo el 13/10/2026, el último día vigente es el 11/11/2026; desde el 12/11/2026 está vencido.
+
+Tarifas de referencia: carro $250.000 COP y moto $100.000 COP. Las reglas de producto, los comportamientos de la maqueta y las decisiones pendientes están detallados en [docs/reglas-de-negocio.md](./docs/reglas-de-negocio.md).
+
+## Tecnologías
+
+- React 19 y TypeScript
+- Vite 8
+- Tailwind CSS 4
+
+Los datos actuales son fixtures locales en memoria: no representan una base de datos ni información real de clientes.
 
 ## Desarrollo
 
@@ -19,24 +46,21 @@ corepack pnpm typecheck
 corepack pnpm build
 ```
 
-`corepack pnpm typecheck` valida TypeScript por separado: Vite transpila TypeScript, pero el build no sustituye esta comprobación.
+El chequeo de tipos es separado del build: Vite transpila TypeScript, pero el build no sustituye `typecheck`.
 
 ## Organización
 
 ```text
 src/
-  data/
-    mockParking.ts       # Datos temporales de demostración
-  domain/
-    parking.ts           # Tipos de los conceptos del parqueadero
-  shared/
-    formatters.ts        # Formateo de moneda y fechas
-  App.tsx                # Composición de vistas y estado de prototipo
-  index.css              # Estilos globales y de la interfaz
+  data/mockParking.ts       # Datos temporales de demostración
+  domain/parking.ts         # Tipos de los conceptos del parqueadero
+  shared/formatters.ts      # Formateo de moneda y fechas
+  App.tsx                   # Composición de vistas y estado del prototipo
+  index.css                 # Estilos de la interfaz
 docs/
-  estado-actual.md       # Alcance y limitaciones del prototipo
-  reglas-de-negocio.md   # Reglas visibles y decisiones por confirmar
-  preparacion-backend.md # Propuesta de límites, contratos y fases
+  estado-actual.md          # Alcance y limitaciones del prototipo
+  reglas-de-negocio.md      # Reglas conocidas y decisiones por confirmar
+  preparacion-backend.md    # Propuesta de límites, contratos y fases
 ```
 
 ## Documentación
@@ -44,7 +68,3 @@ docs/
 - [Estado actual](./docs/estado-actual.md)
 - [Reglas de negocio](./docs/reglas-de-negocio.md)
 - [Preparación del backend](./docs/preparacion-backend.md)
-
-## Nota para desarrollo
-
-Los datos de `src/data/mockParking.ts` son fixtures modificables en memoria, no una base inicial para producción. No guardar credenciales, datos reales de clientes ni secretos en el frontend.
