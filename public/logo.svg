@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%">
+  <defs>
+    <linearGradient id="mintGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4ADE80" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+    <linearGradient id="darkGreenGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <clipPath id="badgeClip">
+      <path d="M 100,10 C 149.7,10 190,50.3 190,100 C 190,149.7 149.7,190 100,190 L 10,190 L 10,100 C 10,50.3 50.3,10 100,10 Z" />
+    </clipPath>
+  </defs>
+
+  <!-- Fondo azul pizarra con forma de insignia -->
+  <path d="M 100,10 C 149.7,10 190,50.3 190,100 C 190,149.7 149.7,190 100,190 L 10,190 L 10,100 C 10,50.3 50.3,10 100,10 Z" fill="#1E293B" />
+
+  <g clip-path="url(#badgeClip)">
+    <!-- Pilar izquierdo de la letra P -->
+    <polygon points="52,120 65,42 92,66 80,120" fill="#10B981" />
+
+    <!-- Sombra interior de la P -->
+    <path d="M 65,42 L 92,66 L 118,66 C 128,66 136,74 136,84 C 136,94 128,102 118,102 L 82,102 L 82,122 L 122,122 C 148,122 166,104 166,82 C 166,60 148,42 122,42 Z" fill="url(#darkGreenGrad)" />
+
+    <!-- Trazo superior/derecho brillante de la P -->
+    <path d="M 65,42 L 122,42 C 148,42 166,60 166,82 C 166,104 148,122 122,122 L 75,122 L 82,106 L 120,106 C 136,106 148,96 148,82 C 148,68 136,58 120,58 L 85,58 Z" fill="url(#mintGrad)" />
+
+    <!-- Carretera curva que forma la base de la P -->
+    <path d="M 0,145 Q 35,92 85,88 L 110,88 C 68,105 42,145 34,195 L 0,195 Z" fill="#1E293B" />
+    
+    <!-- Borde izquierdo verde de la carretera -->
+    <path d="M 0,132 Q 35,84 82,82 L 82,90 Q 38,94 0,148 Z" fill="#34D399" />
+
+    <!-- Carril derecho verde que baja como tallo de la P -->
+    <path d="M 105,94 Q 58,105 32,195 L 62,195 Q 78,125 115,106 Z" fill="url(#mintGrad)" />
+
+    <!-- Líneas discontinuas de la vía -->
+    <path d="M 6,168 Q 16,148 26,136 L 34,140 Q 24,152 15,172 Z" fill="#34D399" />
+    <path d="M 35,125 Q 45,114 57,107 L 63,112 Q 52,119 42,130 Z" fill="#34D399" />
+    <path d="M 66,101 Q 75,97 84,95 L 86,100 Q 77,102 69,106 Z" fill="#34D399" />
+
+    <!-- Silueta del vehículo -->
+    <g transform="translate(72, 67)">
+      <path d="M 8,18 L 16,6 C 18,3 22,2 27,2 L 42,2 C 47,2 51,4 54,8 L 60,16 C 64,17 67,20 67,24 L 67,28 C 67,30 65,32 63,32 L 5,32 C 2,32 0,30 0,27 L 0,22 C 0,19 3,18 8,18 Z" fill="#1E293B" />
+      <!-- Ventanas del auto -->
+      <path d="M 19,7 L 31,7 L 31,16 L 13,16 Z" fill="#4ADE80" />
+      <path d="M 35,7 L 44,7 C 47,7 49,8 51,11 L 54,16 L 35,16 Z" fill="#4ADE80" />
+      <!-- Ruedas -->
+      <circle cx="16" cy="30" r="7" fill="#1E293B" />
+      <circle cx="16" cy="30" r="3.5" fill="#4ADE80" />
+      <circle cx="51" cy="30" r="7" fill="#1E293B" />
+      <circle cx="51" cy="30" r="3.5" fill="#4ADE80" />
+    </g>
+  </g>
+</svg>

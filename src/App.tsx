@@ -83,7 +83,7 @@ export default function App() {
   const canSubmit = !!selectedVehicle && !blockReason
 
   const insideVehicles = vehicles.filter(v => v.inside)
-  const filteredInside = insideVehicles.filter(v => `${v.plate} ${v.owner} ${v.cell}`.toLowerCase().includes(insideSearch.toLowerCase()))
+  const filteredInside = insideVehicles.filter(v => `${v.plate} ${v.owner} ${v.cell}`.toLowerCase().includes(insideSearch.trim().toLowerCase()))
   const filteredMovements = movements.filter(m => `${m.id} ${m.plate} ${m.cell} ${m.operator}`.toLowerCase().includes(historySearch.toLowerCase()))
   const occupiedCars = 52 + vehicles.filter(v => v.inside && v.type === 'Carro' && !['KLM407', 'JPR221'].includes(v.plate)).length
   const occupiedMotos = 8 + vehicles.filter(v => v.inside && v.type === 'Moto').length
@@ -123,7 +123,7 @@ export default function App() {
   return <div className="app-shell canvas-shell">
     {!loggedIn && <Login onLogin={(nextRole) => { setRole(nextRole); setLoggedIn(true) }} />}
     <div className="canvas-identity">
-      <div className="brand-mark">P</div>
+      <img className="canvas-logo" src="/logo.svg" alt="" />
       <div><strong>PARQUEATE</strong><span>Medellín</span></div>
     </div>
     <div className="occupancy-hud">
@@ -155,13 +155,13 @@ export default function App() {
         <button className="popover-logout" onClick={() => setLoggedIn(false)}><Icon name="logout" size={16} />Cerrar sesión</button>
       </div>}
       <nav className="floating-dock" aria-label="Navegación principal">
-        <button className="dock-logo" onClick={() => setModule('operations')} aria-label="Inicio">P</button>
+        <button className="dock-logo" onClick={() => setModule('operations')} aria-label="Inicio"><img src="/logo.svg" alt="" /></button>
         <span className="dock-divider" />
         <div className="dock-navigation">
-          {navigation.map(item => <button key={item.id} title={item.admin && role !== 'admin' ? 'Disponible para administradores' : item.label} className={`dock-item ${module === item.id ? 'active' : ''} ${item.admin && role !== 'admin' ? 'locked' : ''}`} onClick={() => { if (!item.admin || role === 'admin') setModule(item.id) }}>
-            <Icon name={item.icon} size={17} /><span>{item.label}</span>
+          {navigation.map(item => <button key={item.id} aria-label={item.label} aria-current={module === item.id ? 'page' : undefined} title={item.admin && role !== 'admin' ? 'Disponible para administradores' : item.label} className={`dock-item ${module === item.id ? 'active' : ''} ${item.admin && role !== 'admin' ? 'locked' : ''}`} onClick={() => { if (!item.admin || role === 'admin') setModule(item.id) }}>
+            <Icon name={item.icon} size={18} /><span>{item.label}</span>
           </button>)}
-          <button title={role !== 'admin' ? 'Disponible para administradores' : 'Configuración'} className={`dock-item ${module === 'settings' ? 'active' : ''} ${role !== 'admin' ? 'locked' : ''}`} onClick={() => role === 'admin' && setModule('settings')}><Icon name="settings" size={17} /><span>Configuración</span></button>
+          <button aria-label="Configuración" aria-current={module === 'settings' ? 'page' : undefined} title={role !== 'admin' ? 'Disponible para administradores' : 'Configuración'} className={`dock-item ${module === 'settings' ? 'active' : ''} ${role !== 'admin' ? 'locked' : ''}`} onClick={() => role === 'admin' && setModule('settings')}><Icon name="settings" size={18} /><span>Configuración</span></button>
         </div>
         <span className="dock-divider" />
         <button className={`dock-profile ${profileOpen ? 'active' : ''}`} onClick={() => setProfileOpen(!profileOpen)} aria-label="Perfil y rol"><div className="avatar">AM</div><span className={`role-indicator ${role}`} /></button>
@@ -215,13 +215,13 @@ function Login({ onLogin }: { onLogin: (role: Role) => void }) {
     </div>
 
     <div className="lock-status">
-      <div className="lock-brand"><span>P</span><strong>PARQUEATE</strong></div>
+      <div className="lock-brand"><img src="/logo.svg" alt="" /><strong>PARQUEATE</strong></div>
       <div className="lock-clock"><strong>{medellinTime}</strong><span>{medellinDate} · Medellín</span></div>
       <div className="system-pill"><i />Sistema en línea <span>·</span> 61 vehículos dentro <span>·</span> 19 celdas libres</div>
     </div>
 
     <form className={`shift-pod ${manualMode ? 'manual-flow' : ''}`} onSubmit={e => { e.preventDefault(); if (manualMode && manualStep === 1) { if (manualUser.trim().length > 2) setManualStep(2) } else unlock() }}>
-      <div className="shift-pod-head"><span className="eyebrow">{manualMode ? `IDENTIFICACIÓN · PASO ${manualStep} DE 2` : 'DESBLOQUEAR ESTACIÓN'}</span><h1>{manualMode ? 'Vincular turno en terminal' : '¿Quién toma el turno?'}</h1><p>{manualMode ? (manualStep === 1 ? 'Identifica tu cuenta para continuar en esta estación.' : 'Confirma el nivel de acceso y verifica tu identidad.') : 'Selecciona tu perfil para acceder al espacio operativo.'}</p></div>
+      <div className="shift-pod-head"><img className="login-logo" src="/logo.svg" alt="PARQUEATE" /><span className="eyebrow">{manualMode ? `IDENTIFICACIÓN · PASO ${manualStep} DE 2` : 'DESBLOQUEAR ESTACIÓN'}</span><h1>{manualMode ? 'Vincular turno en terminal' : '¿Quién toma el turno?'}</h1><p>{manualMode ? (manualStep === 1 ? 'Identifica tu cuenta para continuar en esta estación.' : 'Confirma el nivel de acceso y verifica tu identidad.') : 'Selecciona tu perfil para acceder al espacio operativo.'}</p></div>
       {!manualMode ? <div className="remembered-section">
         <span className="remembered-label">SESIONES RECORDADAS EN ESTA TERMINAL</span>
         <div className="profile-selector">
@@ -260,7 +260,7 @@ function Login({ onLogin }: { onLogin: (role: Role) => void }) {
 
 function OperationsHeader({ tab, setTab, totalInside }: { tab: OpTab; setTab: (t: OpTab) => void; totalInside: number }) {
   return <div className={`page-head spotlight-head ${tab !== 'console' ? 'compact' : ''}`}><div className="title-row"><div><span className="eyebrow">ESTACIÓN DE ACCESO · MEDELLÍN</span><h1>{tab === 'console' ? '¿Qué vehículo quieres registrar?' : tab === 'inside' ? 'Vehículos dentro' : 'Historial y trazabilidad'}</h1><p>{tab === 'console' ? 'Valida una placa y completa el movimiento en segundos.' : 'Consulta la operación sin salir de la estación.'}</p></div><div className="date-chip"><Icon name="clock" size={16} /><span><small>HOY</small>14 de noviembre, 2026</span></div></div>
-    <div className="tabs view-orbit"><button className={tab === 'console' ? 'active' : ''} onClick={() => setTab('console')}><Icon name="search" size={14} />Registro</button><button className={tab === 'inside' ? 'active' : ''} onClick={() => setTab('inside')}><Icon name="car" size={14} />Dentro <span>{totalInside}</span></button><button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}><Icon name="clock" size={14} />Historial</button></div>
+    <div className="tabs view-orbit" role="group" aria-label="Vistas de operaciones"><button type="button" aria-pressed={tab === 'console'} className={tab === 'console' ? 'active' : ''} onClick={() => setTab('console')}><Icon name="search" size={18} />Registro</button><button type="button" aria-pressed={tab === 'inside'} className={tab === 'inside' ? 'active' : ''} onClick={() => setTab('inside')}><Icon name="car" size={18} />Dentro <span>{totalInside}</span></button><button type="button" aria-pressed={tab === 'history'} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}><Icon name="clock" size={18} />Historial</button></div>
   </div>
 }
 
@@ -313,8 +313,8 @@ function SearchInput({ value, setValue, placeholder }: { value: string; setValue
 }
 
 function InsideTable({ vehicles, search, setSearch, onExit }: { vehicles: Vehicle[]; search: string; setSearch: (s: string) => void; onExit: (v: Vehicle) => void }) {
-  return <TableShell title="Vehículos dentro" eyebrow="OCUPACIÓN EN VIVO" actions={<SearchInput value={search} setValue={setSearch} placeholder="Buscar placa o celda" />}>
-    <table><thead><tr><th>Vehículo</th><th>Tipo</th><th>Celda</th><th>Hora de entrada</th><th>Operario</th><th>Novedad</th><th /></tr></thead><tbody>{vehicles.map(v => <tr key={v.plate}><td><strong>{v.plate}</strong><span>{v.owner}</span></td><td>{v.type}</td><td><span className="cell-code">{v.cell}</span></td><td>{v.entryTime}</td><td>{v.operator}</td><td className="note-cell">{v.incident}</td><td><Button variant="secondary" onClick={() => onExit(v)}>Dar salida</Button></td></tr>)}</tbody></table>
+  return <TableShell title="Vehículos dentro" eyebrow="OCUPACIÓN EN VIVO" actions={<SearchInput value={search} setValue={setSearch} placeholder="Buscar placa, usuario o celda" />}>
+    <table className="inside-table"><thead><tr><th>Placa</th><th>Usuario</th><th>Tipo</th><th>Celda</th><th>Hora de entrada</th><th>Operario</th><th>Novedad</th><th>Acción</th></tr></thead><tbody>{vehicles.map(v => <tr key={v.plate}><td><strong>{v.plate}</strong></td><td className="owner-cell">{v.owner}</td><td>{v.type}</td><td><span className="cell-code">{v.cell}</span></td><td>{v.entryTime}</td><td>{v.operator}</td><td className="note-cell">{v.incident}</td><td><Button variant="secondary" onClick={() => onExit(v)}>Dar salida</Button></td></tr>)}</tbody></table>
   </TableShell>
 }
 
