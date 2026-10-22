@@ -4,7 +4,7 @@
 
 El MVP 1 corresponde a la **Iteración 1: Gestión de la entrada y salida de vehículos** del parqueadero Autos Colombia (Medellín), que presta el servicio por mensualidad. Frontend (React), backend (FastAPI) y base de datos (PostgreSQL) están integrados y funcionando.
 
-Las demás capacidades del proyecto (registrar usuarios, manejar las celdas y gestionar los pagos) corresponden a iteraciones siguientes.
+> **Nota:** El registro de usuarios, vehículos y pagos y la configuración de las celdas no hacen parte de esta iteración; corresponden a los módulos de registro de usuarios, manejo de celdas y gestión de pagos de iteraciones siguientes. Para esta iteración, esos datos se cargan con herramientas de apoyo del backend (`backend/registrar_vehiculo.py`, `backend/database/seed.sql`).
 
 ## Qué permite hacer
 

@@ -14,7 +14,7 @@ El servicio es por mensualidad: solo entran vehículos con la mensualidad vigent
 - Consultar la ocupación en tiempo real, los vehículos dentro y el historial con filtros.
 - Anular registros con justificación (solo administrador); nunca se eliminan.
 
-Quedan fuera de esta entrega el registro de usuarios y vehículos, los pagos y la configuración del parqueadero. Esos datos se cargan por SQL (ver [backend/README.md](./backend/README.md)).
+> **Nota:** El registro de usuarios, vehículos y pagos y la configuración de las celdas no hacen parte de esta iteración; corresponden a los módulos de registro de usuarios, manejo de celdas y gestión de pagos de iteraciones siguientes. Para esta iteración, esos datos se cargan con herramientas de apoyo del backend (`registrar_vehiculo.py`, `seed.sql`). Ver [backend/README.md](./backend/README.md#registrar-vehículos-y-mensualidades).
 
 | Regla | Descripción |
 | --- | --- |

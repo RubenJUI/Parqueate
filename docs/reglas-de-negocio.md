@@ -14,6 +14,20 @@ Reglas del módulo **Gestión de Entrada y Salida de Vehículos** (requisito ver
 
 Cambiar estos valores no requiere modificar el código (RNF-08).
 
+## Precondiciones
+
+El requerimiento indica qué debe existir antes de usar el módulo, pero no cómo se crea. Así se cumple cada precondición en el MVP 1:
+
+| Precondición | Cómo se cumple |
+| --- | --- |
+| El operario ha iniciado sesión | `backend/create_admin.py` crea las cuentas; el login está en la aplicación |
+| El usuario y su vehículo (placa y tipo) están registrados | `backend/registrar_vehiculo.py`, con el nombre, documento y teléfono del usuario y la placa y el tipo del vehículo |
+| El pago de la mensualidad está registrado con su fecha | El mismo script, con la fecha del pago; volver a ejecutarlo registra la renovación |
+| Las celdas están configuradas por tipo | `backend/database/seed.sql` carga 70 celdas de carro y 10 de moto |
+| Cupo garantizado | `registrar_vehiculo.py` rechaza el pago si las mensualidades vigentes superarían las celdas del tipo |
+
+> **Nota:** El registro de usuarios, vehículos y pagos y la configuración de las celdas no hacen parte de esta iteración; corresponden a los módulos de registro de usuarios, manejo de celdas y gestión de pagos de iteraciones siguientes. Para esta iteración, esos datos se cargan con herramientas de apoyo del backend (`registrar_vehiculo.py`, `seed.sql`).
+
 ## Decisiones tomadas al implementar
 
 - **Vigencia:** se toma el pago más reciente de la placa con fecha hasta hoy. Vence en `fecha_pago + 29 días` y ese último día la entrada se permite con la alerta "Su mensualidad vence hoy". Un pago con fecha futura no da vigencia.
