@@ -37,9 +37,12 @@ Los datos actuales son fixtures locales en memoria: no representan una base de d
 
 ## Desarrollo
 
-Requiere Node.js 22 y pnpm 10.34.3. Las versiones están declaradas en `.mise.toml` y `package.json`.
+Requiere Node.js 22 y pnpm 10.34.3. Las versiones están declaradas en `.mise.toml` y `frontend/package.json`.
+
+### Frontend
 
 ```sh
+cd frontend
 corepack pnpm install
 corepack pnpm dev
 corepack pnpm typecheck
@@ -48,15 +51,33 @@ corepack pnpm build
 
 El chequeo de tipos es separado del build: Vite transpila TypeScript, pero el build no sustituye `typecheck`.
 
+### Backend
+
+API en FastAPI + PostgreSQL. Instalación, base de datos y endpoints en [backend/README.md](./backend/README.md).
+
+```sh
+cd backend
+source venv/bin/activate
+python main.py
+```
+
 ## Organización
 
 ```text
-src/
-  data/mockParking.ts       # Datos temporales de demostración
-  domain/parking.ts         # Tipos de los conceptos del parqueadero
-  shared/formatters.ts      # Formateo de moneda y fechas
-  App.tsx                   # Composición de vistas y estado del prototipo
-  index.css                 # Estilos de la interfaz
+frontend/
+  src/
+    data/mockParking.ts     # Datos temporales de demostración
+    domain/parking.ts       # Tipos de los conceptos del parqueadero
+    shared/formatters.ts    # Formateo de moneda y fechas
+    App.tsx                 # Composición de vistas y estado del prototipo
+    index.css               # Estilos de la interfaz
+backend/
+  auth/                     # Login JWT y permisos por rol
+  config/                   # Variables de entorno
+  database/                 # Conexión y schema.sql (modelo físico)
+  models/                   # Acceso a datos con SQL, uno por tabla
+  schema/                   # Esquemas Pydantic de entrada/salida
+  main.py                   # Endpoints de la API
 docs/
   estado-actual.md          # Alcance y limitaciones del prototipo
   reglas-de-negocio.md      # Reglas conocidas y decisiones por confirmar

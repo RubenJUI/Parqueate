@@ -2,7 +2,7 @@
 
 ## Límite de responsabilidad recomendado
 
-Conservar React como cliente de presentación y mover la autoridad sobre identidad, permisos, persistencia, asignación de celdas, vigencias y auditoría al servidor. La estructura actual es el primer paso de orden: los tipos viven en `src/domain/parking.ts`, los fixtures en `src/data/mockParking.ts` y el formateo en `src/shared/formatters.ts`. `App.tsx` aún concentra navegación, estado y vistas; conviene dividirlo por módulos al empezar a conectar casos de uso, no introducir capas vacías antes de elegir el contrato.
+Conservar React como cliente de presentación y mover la autoridad sobre identidad, permisos, persistencia, asignación de celdas, vigencias y auditoría al servidor. La estructura actual es el primer paso de orden: los tipos viven en `frontend/src/domain/parking.ts`, los fixtures en `frontend/src/data/mockParking.ts` y el formateo en `frontend/src/shared/formatters.ts`. `App.tsx` aún concentra navegación, estado y vistas; conviene dividirlo por módulos al empezar a conectar casos de uso, no introducir capas vacías antes de elegir el contrato.
 
 El frontend no debe conectarse directamente a la base de datos ni incluir secretos. Una capa API sustituirá los fixtures; componentes y reglas de interfaz dependerán de funciones de aplicación tipadas, no de detalles de la base de datos.
 

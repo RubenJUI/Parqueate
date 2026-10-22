@@ -22,7 +22,7 @@ La aplicación es un prototipo frontend de una estación de parqueadero. Está c
 
 ## Datos de demostración y comportamiento simulado
 
-`src/data/mockParking.ts` contiene los vehículos, movimientos, pagos y parámetros ficticios. `src/App.tsx` usa ese estado local para simular operaciones. Algunas cifras y fechas de la interfaz son fijas y no derivan de una fuente de verdad; no deben reutilizarse como cálculos de producción.
+`frontend/src/data/mockParking.ts` contiene los vehículos, movimientos, pagos y parámetros ficticios. `frontend/src/App.tsx` usa ese estado local para simular operaciones. Algunas cifras y fechas de la interfaz son fijas y no derivan de una fuente de verdad; no deben reutilizarse como cálculos de producción.
 
 El modelo actual mezcla información persistida y valores de presentación. Por ejemplo, `Vehicle` incluye datos del titular, estado de mensualidad y estado de ocupación; `Movement` usa fechas ya formateadas para mostrar en pantalla. Antes de conectarlo a una API se deben separar los modelos de transporte del estado calculado para la UI, y acordar identificadores, fechas ISO, relaciones y estados canónicos.
 
