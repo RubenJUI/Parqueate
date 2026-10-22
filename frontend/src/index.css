@@ -1502,3 +1502,74 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
     font-size: 7px;
   }
 }
+
+/* Integración con la API: login real, alertas de capacidad y estados de carga. */
+.hud-light.red {
+  background: var(--red);
+  box-shadow: 0 0 0 4px rgba(239,68,68,.12), 0 0 9px rgba(239,68,68,.45);
+}
+.hud-pill.hud-full {
+  border-color: #fecaca;
+  background: rgba(254,242,242,.85);
+}
+.capacity-alert {
+  max-width: 760px;
+  margin: 0 auto 14px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 11px;
+}
+.system-pill.offline > i {
+  background: var(--red);
+  box-shadow: 0 0 0 4px rgba(239,68,68,.12), 0 0 8px rgba(239,68,68,.45);
+}
+.login-fields {
+  margin-top: 18px;
+  display: grid;
+  gap: 12px;
+}
+.login-fields label > span {
+  display: block;
+  margin: 0 0 6px 5px;
+  color: var(--subtle);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: .1em;
+}
+.login-fields input {
+  width: 100%;
+  height: 46px;
+  padding: 0 17px;
+  border: 1px solid rgba(203,213,225,.9);
+  border-radius: 999px;
+  outline: 0;
+  background: rgba(248,250,252,.8);
+  color: var(--ink);
+  font-size: 13px;
+  transition: border .18s, box-shadow .18s;
+}
+.login-fields input:focus {
+  border-color: #64748b;
+  box-shadow: 0 0 0 4px rgba(226,232,240,.7);
+}
+.login-fields input::placeholder {
+  color: #cbd5e1;
+}
+.login-error {
+  margin-top: 12px;
+}
+.login-submit {
+  width: 100%;
+  margin-top: 16px;
+  justify-content: center;
+}
+.table-message {
+  padding: 28px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+.table-notice {
+  margin: 12px 15px 0;
+}

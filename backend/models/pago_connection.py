@@ -30,9 +30,13 @@ class PagoConnection:
         self.conn = conn
 
     def get_ultimo(self, placa: str) -> Optional[dict]:
+        """Pago más reciente hasta hoy; un pago con fecha futura todavía no da vigencia."""
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT * FROM pago WHERE placa = %s ORDER BY fecha_pago DESC, id_pago DESC LIMIT 1",
+                """
+                SELECT * FROM pago WHERE placa = %s AND fecha_pago <= CURRENT_DATE
+                ORDER BY fecha_pago DESC, id_pago DESC LIMIT 1
+                """,
                 (placa,),
             )
             return cur.fetchone()

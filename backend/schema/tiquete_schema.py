@@ -40,7 +40,9 @@ class TiqueteOut(BaseModel):
     id_espacio: int
     numero_espacio: str
     id_usuario_entrada: int
+    usuario_entrada: str
     id_usuario_salida: Optional[int] = None
+    usuario_salida: Optional[str] = None
     fecha_hora_entrada: datetime
     fecha_hora_salida: Optional[datetime] = None
     novedad_entrada: Optional[str] = None
@@ -48,6 +50,7 @@ class TiqueteOut(BaseModel):
     estado: EstadoTiquete
     motivo_anulacion: Optional[str] = None
     id_usuario_anulacion: Optional[int] = None
+    usuario_anulacion: Optional[str] = None
     fecha_hora_anulacion: Optional[datetime] = None
 
     @classmethod

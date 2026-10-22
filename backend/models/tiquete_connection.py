@@ -1,9 +1,10 @@
 from datetime import date
 from typing import Optional
 
-# Datos del tiquete con la celda, el vehículo y su propietario, y el estado derivado del registro.
+# Datos del tiquete con la celda, el vehículo, su propietario, los operarios y el estado derivado del registro.
 SELECT_TIQUETE = """
     SELECT t.*, e.numero_espacio, v.tipo_vehiculo, v.id_propietario, p.nombre AS propietario,
+           ue.nombre AS usuario_entrada, us.nombre AS usuario_salida, ua.nombre AS usuario_anulacion,
            CASE WHEN t.anulado THEN 'Anulado'
                 WHEN t.fecha_hora_salida IS NULL THEN 'Activo'
                 ELSE 'Finalizado' END AS estado
@@ -11,6 +12,9 @@ SELECT_TIQUETE = """
     JOIN espacio e ON e.id_espacio = t.id_espacio
     JOIN vehiculo v ON v.placa = t.placa
     JOIN propietario p ON p.id_propietario = v.id_propietario
+    JOIN usuario ue ON ue.id_usuario = t.id_usuario_entrada
+    LEFT JOIN usuario us ON us.id_usuario = t.id_usuario_salida
+    LEFT JOIN usuario ua ON ua.id_usuario = t.id_usuario_anulacion
 """
 
 

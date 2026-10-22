@@ -2,11 +2,11 @@
 -- Las fechas de pago son relativas a hoy para que siempre haya casos vigentes, por vencer y vencidos.
 -- Uso: psql -d parqueadero_autos_colombia -f database/datos_prueba.sql
 
-INSERT INTO propietario (documento, nombre, telefono) VALUES
-    ('1036000001', 'Carlos Restrepo', '3000000001'),
-    ('1036000002', 'Laura Gómez', '3000000002'),
-    ('1036000003', 'Andrés Pérez', '3000000003'),
-    ('1036000004', 'María Ospina', '3000000004')
+INSERT INTO propietario (documento, nombre, telefono, autoriza_datos, fecha_autorizacion) VALUES
+    ('1036000001', 'Carlos Restrepo', '3000000001', TRUE, CURRENT_TIMESTAMP),
+    ('1036000002', 'Laura Gómez', '3000000002', TRUE, CURRENT_TIMESTAMP),
+    ('1036000003', 'Andrés Pérez', '3000000003', TRUE, CURRENT_TIMESTAMP),
+    ('1036000004', 'María Ospina', '3000000004', TRUE, CURRENT_TIMESTAMP)
 ON CONFLICT (documento) DO NOTHING;
 
 INSERT INTO vehiculo (placa, tipo_vehiculo, id_propietario)

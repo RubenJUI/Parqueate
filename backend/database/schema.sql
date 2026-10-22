@@ -3,12 +3,16 @@
 -- Propietarios, vehiculos, pagos, celdas y tarifas son precondiciones del modulo: se cargan por SQL.
 -- Uso: createdb parqueadero_autos_colombia && psql -d parqueadero_autos_colombia -f database/schema.sql
 
--- Tabla Propietario (usuario del parqueadero con mensualidad)
+-- Tabla Propietario (usuario del parqueadero con mensualidad).
+-- RNF-10: se guarda la autorizacion de tratamiento de datos personales (Ley 1581 de 2012).
 CREATE TABLE propietario (
     id_propietario SERIAL PRIMARY KEY,
     documento VARCHAR(20) UNIQUE NOT NULL,
     nombre VARCHAR(100) NOT NULL,
-    telefono VARCHAR(20)
+    telefono VARCHAR(20),
+    autoriza_datos BOOLEAN NOT NULL DEFAULT FALSE,
+    fecha_autorizacion TIMESTAMP,
+    CONSTRAINT propietario_autorizacion_check CHECK (NOT autoriza_datos OR fecha_autorizacion IS NOT NULL)
 );
 
 -- Tabla Vehiculo. RF-02: toda placa esta asociada a un propietario registrado.
