@@ -2,7 +2,7 @@
 
 API en Python (FastAPI + PostgreSQL) del módulo **Gestión de Entrada y Salida de Vehículos**: el parqueadero presta el servicio por mensualidad, así que solo entran vehículos con la mensualidad vigente y no hay cobro por horas. Incluye autenticación JWT con roles administrador y operador.
 
-El alcance de esta entrega es solo ese módulo. Los usuarios del parqueadero, sus vehículos, los pagos de mensualidad, las celdas y las tarifas son precondiciones: se cargan por SQL y la API solo los consulta. Sigue la estructura de [sistema-de-credito-fiado](https://github.com/Frank-ospina/sistema-de-credito-fiado/tree/main/backend): FastAPI, `psycopg2` con SQL crudo (sin ORM) y JWT.
+El alcance de esta entrega es solo ese módulo. Los usuarios del parqueadero, sus vehículos, los pagos de mensualidad, las celdas y las tarifas son precondiciones: se cargan con `registrar_vehiculo.py` o por SQL, y la API solo los consulta. Sigue la estructura de [sistema-de-credito-fiado](https://github.com/Frank-ospina/sistema-de-credito-fiado/tree/main/backend): FastAPI, `psycopg2` con SQL crudo (sin ORM) y JWT.
 
 ## Estructura
 
@@ -10,18 +10,22 @@ El alcance de esta entrega es solo ese módulo. Los usuarios del parqueadero, su
 - `database/database.py`: conexión a PostgreSQL (`get_db` como dependencia de FastAPI).
 - `database/schema.sql`: modelo físico del módulo (7 tablas), con índices que impiden la doble ocupación.
 - `database/seed.sql`: las 80 celdas (C-01 a C-70 para carros y M-01 a M-10 para motos) y las tarifas mensuales ($250.000 carro, $100.000 moto).
+- `database/registrar_vehiculo.sql`: plantilla para registrar a mano un usuario, su vehículo y su pago, y consultar la vigencia de todos.
 - `database/datos_prueba.sql`: propietarios, vehículos y pagos ficticios con fechas relativas a hoy, para probar mensualidades vigentes, por vencer, vencidas y sin pago.
 - `models/*_connection.py`: acceso a datos con SQL crudo.
 - `schema/*_schema.py`: esquemas Pydantic de entrada y salida; `schema/tipos.py` reúne los valores permitidos por los `CHECK` de la base.
 - `auth/`: hashing de contraseñas, JWT, permisos por rol y login (`POST /auth/token`).
 - `main.py`: endpoints.
 - `create_admin.py`: crea o actualiza un usuario del sistema (administrador u operador).
+- `registrar_vehiculo.py`: registra un usuario del parqueadero, su vehículo y el pago de la mensualidad.
+- `respaldo.sh` e `instalar_respaldo.sh`: copia de seguridad de la base y su programación diaria (RNF-07).
+- `tests/`: pruebas automáticas con pytest (casos de uso, reglas y herramientas).
 
 ## Tablas
 
 | Tabla | Para qué la usa el módulo |
 | --- | --- |
-| `propietario` | Usuario del parqueadero dueño del vehículo (RF-02) |
+| `propietario` | Usuario del parqueadero dueño del vehículo (RF-02), con su autorización de tratamiento de datos (RNF-10) |
 | `vehiculo` | Placa, tipo (Carro o Moto) y propietario |
 | `pago` | Fecha del pago de la mensualidad, para validar la vigencia (RF-03) |
 | `espacio` | Celdas por tipo y su estado |
@@ -38,7 +42,7 @@ El alcance de esta entrega es solo ese módulo. Los usuarios del parqueadero, su
   - Se asigna la primera celda libre del tipo del vehículo (RF-05, RN-01), o la que elija el operario con `id_espacio`.
   - Si quedan `DIAS_ALERTA` días o menos, la respuesta trae `alerta`, por ejemplo "Su mensualidad vence en 3 días" (RF-04).
   - Si no hay celdas libres, responde `409` y deja un aviso en el log del servidor (RF-06).
-- **Vigencia:** se toma el pago más reciente de la placa. Vence en `fecha_pago + (DIAS_VIGENCIA - 1)`: con 30 días, un pago del 13/10/2026 vence el 11/11/2026.
+- **Vigencia:** se toma el pago más reciente de la placa con fecha hasta hoy (un pago futuro no da vigencia). Vence en `fecha_pago + (DIAS_VIGENCIA - 1)`: con 30 días, un pago del 13/10/2026 vence el 11/11/2026.
 - **Salida** (`POST /api/tiquetes/salida`): requiere una entrada abierta; si no hay, responde "El vehículo no tiene entrada registrada" (RF-09). Registra la hora de salida y el operario y libera la celda (RF-08).
 - **Novedades** (RF-13): la entrada y la salida aceptan un campo `novedad` opcional, por ejemplo "rayón en la puerta".
 - **Cambio manual de celda** (`PUT /api/tiquetes/{id}/espacio`): solo a una celda libre del mismo tipo.
@@ -57,10 +61,10 @@ El alcance de esta entrega es solo ese módulo. Los usuarios del parqueadero, su
    source venv/bin/activate
    ```
 
-2. Instala las dependencias:
+2. Instala las dependencias (`requirements-dev.txt` agrega pytest para las pruebas):
 
    ```sh
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    ```
 
 3. Copia `.env.example` a `.env` y ajusta los valores: la contraseña de `parqueate` en `PGPASSWORD` y una `SECRET_KEY` propia:
@@ -84,6 +88,45 @@ El alcance de esta entrega es solo ese módulo. Los usuarios del parqueadero, su
    python create_admin.py admin@autoscolombia.co admin123 "Administrador"
    python create_admin.py operario@autoscolombia.co operario123 "Operario" Operador
    ```
+
+## Registrar vehículos y mensualidades
+
+El módulo de esta iteración no tiene pantalla para registrar usuarios del parqueadero, vehículos ni pagos: son precondiciones del requerimiento. Para cargarlos:
+
+```sh
+python registrar_vehiculo.py <placa> <Carro|Moto> <documento> "<nombre>" <telefono> [fecha_pago AAAA-MM-DD] [--autoriza-datos]
+python registrar_vehiculo.py XYZ987 Carro 1036999999 "Ana Restrepo" 3001234567 2026-10-13 --autoriza-datos
+```
+
+- **Habeas Data (RNF-10):** un propietario nuevo solo se registra con `--autoriza-datos`, que deja constancia de que autorizó el tratamiento de sus datos (Ley 1581 de 2012) y su fecha. Para renovar no hace falta repetirlo.
+- Si el propietario o el vehículo ya existen se reutilizan; volver a ejecutarlo con otra fecha registra la renovación.
+- Sin fecha, el pago queda con la fecha de hoy. El monto sale de la tabla `tarifa`.
+- **Cupo garantizado:** rechaza el pago si algún día de su vigencia habría más mensualidades vigentes de ese tipo que celdas (70 carros, 10 motos). Una renovación del mismo vehículo no ocupa cupo extra.
+- Rechaza placas de otro propietario, tipos distintos al registrado, placas que no sean de 5 o 6 letras o números y fechas de pago futuras. Ante un error no guarda nada.
+
+Para hacerlo con SQL, usa la plantilla `database/registrar_vehiculo.sql` en DBeaver (esa vía no valida el cupo).
+
+## Pruebas
+
+Las pruebas usan una base aparte, `parqueadero_test`, que se reinicia en cada corrida; se niegan a correr si el nombre de la base no termina en `_test`, para no tocar la base real.
+
+```sh
+createdb -O parqueate parqueadero_test   # una sola vez
+python -m pytest
+```
+
+Cubren los 7 casos de uso del documento de requerimientos, los ejemplos de vigencia (incluido febrero), las reglas RN y RF, la autenticación, la anulación y la herramienta de registro (cupo garantizado y Habeas Data). La relación entre requisitos y pruebas está en [docs/reglas-de-negocio.md](../docs/reglas-de-negocio.md#trazabilidad).
+
+## Respaldo (RNF-07)
+
+```sh
+./respaldo.sh             # respaldo inmediato en backups/
+./instalar_respaldo.sh    # programa un respaldo diario a las 23:00 (macOS)
+```
+
+- Cada respaldo es un archivo `.dump` de `pg_dump` y se conservan los últimos 30 días (`DIAS_RESPALDO`).
+- macOS no deja que las tareas programadas lean la carpeta Documentos, así que `instalar_respaldo.sh` copia el script y la conexión a `~/.parqueate/` y guarda los respaldos en `~/ParqueateRespaldos/`. Vuelve a ejecutarlo si cambias la contraseña de la base.
+- Para restaurar: `pg_restore -h localhost -U parqueate -d parqueadero_autos_colombia --clean --if-exists <archivo>.dump`.
 
 ## Uso
 

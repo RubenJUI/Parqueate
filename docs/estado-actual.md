@@ -1,34 +1,53 @@
-# Estado actual del producto
+# Estado actual: MVP 1
 
-## Qué existe
+## Alcance
 
-La aplicación es un prototipo frontend de una estación de parqueadero. Está compuesta por:
+El MVP 1 corresponde a la **Iteración 1: Gestión de la entrada y salida de vehículos** del parqueadero Autos Colombia (Medellín), que presta el servicio por mensualidad. Frontend (React), backend (FastAPI) y base de datos (PostgreSQL) están integrados y funcionando.
 
-- Acceso visual por perfiles recordados o identificación manual.
-- Operaciones: registro de entrada/salida, consulta de vehículos dentro e historial.
-- Usuarios y celdas: matriz de espacios y tabla de clientes/vehículos.
-- Pagos: lista de mensualidades y formulario de registro.
-- Configuración: capacidad, tarifas, vigencia, alertas y usuarios internos.
-- Roles visuales de operario y administrador.
+Las demás capacidades del proyecto (registrar usuarios, manejar las celdas y gestionar los pagos) corresponden a iteraciones siguientes.
 
-## Qué no existe todavía
+## Qué permite hacer
 
-- Servidor, API, base de datos o sincronización entre terminales.
-- Inicio de sesión: cualquier PIN no vacío permite continuar; el perfil y el rol se pueden simular en el cliente.
-- Persistencia: cambios de vehículos, pagos, movimientos y configuración se pierden al recargar.
-- Autorización real: las restricciones de rol solo ocultan o bloquean controles visuales.
-- Integración de pagos, recibos, notificaciones, carga de archivos o auditoría en servidor.
-- Validación completa de datos, errores de red, estados de carga o concurrencia entre operarios.
+**Desde la aplicación web (operario y administrador):**
 
-## Datos de demostración y comportamiento simulado
+- Iniciar sesión con correo y contraseña; el rol lo define el servidor.
+- Registrar la entrada de un vehículo por placa:
+  - valida que la placa esté registrada, que la mensualidad esté vigente y que el vehículo no esté dentro;
+  - avisa si la mensualidad vence en 3 días o menos;
+  - asigna la primera celda libre del tipo del vehículo, o la que elija el operario;
+  - guarda la fecha, la hora y el operario.
+- Registrar la salida: cierra el registro y libera la celda.
+- Adjuntar novedades (rayón, golpe) a la entrada o la salida.
+- Consultar la ocupación en tiempo real, con alerta cuando un tipo se queda sin celdas libres.
+- Consultar los vehículos dentro y el historial con filtros por placa, usuario, celda y fechas.
+- Anular registros con justificación (solo administrador); los registros nunca se eliminan.
 
-`frontend/src/data/mockParking.ts` contiene los vehículos, movimientos, pagos y parámetros ficticios. `frontend/src/App.tsx` usa ese estado local para simular operaciones. Algunas cifras y fechas de la interfaz son fijas y no derivan de una fuente de verdad; no deben reutilizarse como cálculos de producción.
+**Desde la terminal (precondiciones del módulo):**
 
-El modelo actual mezcla información persistida y valores de presentación. Por ejemplo, `Vehicle` incluye datos del titular, estado de mensualidad y estado de ocupación; `Movement` usa fechas ya formateadas para mostrar en pantalla. Antes de conectarlo a una API se deben separar los modelos de transporte del estado calculado para la UI, y acordar identificadores, fechas ISO, relaciones y estados canónicos.
+| Herramienta | Para qué |
+| --- | --- |
+| `backend/create_admin.py` | Crear administradores y operarios del sistema |
+| `backend/registrar_vehiculo.py` | Registrar un usuario del parqueadero, su vehículo y su pago, o renovar la mensualidad; valida el cupo garantizado y la autorización de datos |
+| `backend/database/registrar_vehiculo.sql` | Lo mismo como plantilla SQL para DBeaver |
+| `backend/respaldo.sh` e `instalar_respaldo.sh` | Copia de seguridad de la base y su programación diaria |
 
-## Principios para el siguiente trabajo
+## Pruebas
 
-1. Mantener fixtures explícitamente separados de producción.
-2. Mover las reglas de negocio a la capa de dominio/servidor; el frontend puede anticipar validaciones, pero el servidor decide.
-3. No elegir framework de backend, base de datos ni proveedor de identidad hasta acordar necesidades operativas y restricciones.
-4. Convertir reglas y flujos confirmados en pruebas antes de sustituir los datos simulados.
+`backend/tests/` tiene 30 pruebas automáticas que se ejecutan contra una base de pruebas aparte (ver [backend/README.md](../backend/README.md#pruebas)):
+
+- los 7 casos de uso del documento de requerimientos;
+- los ejemplos de vigencia del documento, incluido el caso de febrero;
+- las reglas RN-01 y RF-04 a RF-13, autenticación, anulación y ausencia de borrados;
+- la herramienta de registro: cupo garantizado, Habeas Data, renovaciones y validaciones.
+
+Resultado al cierre del MVP 1: **30 de 30 pruebas aprobadas**. La relación entre cada requisito y su prueba está en [reglas-de-negocio.md](./reglas-de-negocio.md#trazabilidad).
+
+## Limitaciones conocidas
+
+- No hay pantallas para registrar usuarios, vehículos, pagos ni administrar celdas: se cargan con las herramientas de la terminal (iteraciones siguientes).
+- La alerta de RF-06 se muestra en pantalla a todas las sesiones abiertas, pero no envía correos ni notificaciones.
+- El cambio de celda de un vehículo que ya está dentro existe en la API (`PUT /api/tiquetes/{id}/espacio`), pero no tiene botón en la interfaz; en pantalla la celda se elige al registrar la entrada.
+- RNF-01 (respuesta < 3 s) no se ha medido formalmente; en local las respuestas son inmediatas.
+- RNF-06 (disponibilidad del 99 %) depende del despliegue; hoy el sistema corre en local.
+- RNF-09: probado en Chrome; falta verificar Edge y Firefox.
+- La plantilla SQL de registro no valida el cupo garantizado; el script sí.
