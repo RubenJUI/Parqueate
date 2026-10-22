@@ -1,11 +1,10 @@
 from typing import Literal
 
-TipoVehiculo = Literal["Carro", "Moto", "Camioneta"]
-TipoPermitido = Literal["Carro", "Moto", "Camioneta", "Todos"]
+TipoVehiculo = Literal["Carro", "Moto"]
 EstadoEspacio = Literal["Disponible", "Ocupado", "Mantenimiento"]
 RolUsuario = Literal["Administrador", "Operador"]
-EstadoPago = Literal["Pendiente", "Pagado"]
-MetodoPago = Literal["Efectivo", "Tarjeta", "Transferencia"]
+EstadoMensualidad = Literal["Vigente", "Por vencer", "Vencida"]
+EstadoTiquete = Literal["Activo", "Finalizado", "Anulado"]
 
 
 def normalizar_placa(placa: str) -> str:

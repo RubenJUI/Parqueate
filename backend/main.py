@@ -1,3 +1,5 @@
+import logging
+from datetime import date
 from typing import List, Optional
 
 import psycopg2
@@ -5,39 +7,35 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from psycopg2 import errors
-from starlette.status import HTTP_200_OK, HTTP_201_CREATED, HTTP_204_NO_CONTENT, HTTP_409_CONFLICT
+from starlette.status import HTTP_200_OK, HTTP_201_CREATED, HTTP_409_CONFLICT
 
-from auth.auth import get_current_active_user, get_current_admin_user, get_password_hash
+from auth.auth import get_current_active_user, get_current_admin_user
 from auth.auth_routes import router as auth_router
 from config import ALLOWED_ORIGINS
 from database.database import get_db
 from models.espacio_connection import EspacioConnection
-from models.pago_connection import PagoConnection
-from models.propietario_connection import PropietarioConnection
+from models.pago_connection import PagoConnection, calcular_vigencia
 from models.tarifa_connection import TarifaConnection
 from models.tiquete_connection import TiqueteConnection
-from models.usuario_connection import UsuarioConnection
 from models.vehiculo_connection import VehiculoConnection
-from schema.espacio_schema import EspacioCreateSchema, EspacioOut, EspacioUpdateSchema
-from schema.pago_schema import PagoCreateSchema, PagoOut
-from schema.propietario_schema import PropietarioCreateSchema, PropietarioOut, PropietarioUpdateSchema
-from schema.tarifa_schema import TarifaCreateSchema, TarifaOut, TarifaUpdateSchema
-from schema.tipos import EstadoEspacio, TipoPermitido, TipoVehiculo, normalizar_placa
-from schema.tiquete_schema import PlacaSchema, TiqueteOut
-from schema.usuario_schema import UsuarioCreateSchema, UsuarioOut, UsuarioUpdateSchema
-from schema.vehiculo_schema import VehiculoCreateSchema, VehiculoOut, VehiculoUpdateSchema
+from schema.espacio_schema import EspacioOut, OcupacionOut
+from schema.tarifa_schema import TarifaOut
+from schema.tipos import EstadoEspacio, TipoVehiculo, normalizar_placa
+from schema.tiquete_schema import AnulacionSchema, CambioEspacioSchema, EntradaOut, EntradaSchema, PlacaSchema, TiqueteOut
+from schema.usuario_schema import UsuarioOut
+from schema.vehiculo_schema import VehiculoConsultaOut
 
 tags_metadata = [
     {"name": "auth", "description": "Login y emisión del token JWT."},
-    {"name": "Usuarios", "description": "Administradores y operadores del parqueadero."},
-    {"name": "Propietarios", "description": "Titulares de los vehículos."},
-    {"name": "Vehículos", "description": "Vehículos registrados, identificados por placa."},
-    {"name": "Espacios", "description": "Celdas del parqueadero y su disponibilidad."},
-    {"name": "Tarifas", "description": "Valores por hora y por día según el tipo de vehículo."},
-    {"name": "Tiquetes", "description": "Registro de entradas y salidas."},
-    {"name": "Pagos", "description": "Pago de los tiquetes cerrados."},
+    {"name": "Usuarios", "description": "Operario autenticado."},
+    {"name": "Vehículos", "description": "Consulta por placa: usuario, mensualidad y si está dentro."},
+    {"name": "Espacios", "description": "Celdas del parqueadero y ocupación."},
+    {"name": "Tarifas", "description": "Valor de la mensualidad por tipo de vehículo."},
+    {"name": "Tiquetes", "description": "Registro de entradas y salidas, historial y anulaciones."},
     {"name": "Sistema", "description": "Endpoints de estado del servicio."},
 ]
+
+logger = logging.getLogger("parqueate")
 
 app = FastAPI(title="Parqueate - Autos Colombia API", openapi_tags=tags_metadata)
 
@@ -75,252 +73,47 @@ def get_me(current_user: UsuarioOut = Depends(get_current_active_user)):
     return current_user
 
 
-@app.get(
-    "/api/usuarios",
-    response_model=List[UsuarioOut],
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_200_OK,
-    tags=["Usuarios"],
-)
-def list_usuarios(conn=Depends(get_db)):
-    rows = UsuarioConnection(conn).list_all()
-    return [UsuarioOut.from_row(row) for row in rows]
+def formatear_fecha(fecha: date) -> str:
+    return fecha.strftime("%d/%m/%Y")
 
 
-@app.get(
-    "/api/usuarios/{id_usuario}",
-    response_model=UsuarioOut,
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_200_OK,
-    tags=["Usuarios"],
-)
-def get_usuario(id_usuario: int, conn=Depends(get_db)):
-    row = UsuarioConnection(conn).get_by_id(id_usuario)
-    if not row:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    return UsuarioOut.from_row(row)
+def mensaje_alerta(dias_restantes: int) -> str:
+    if dias_restantes == 0:
+        return "Su mensualidad vence hoy"
+    if dias_restantes == 1:
+        return "Su mensualidad vence mañana"
+    return f"Su mensualidad vence en {dias_restantes} días"
 
 
-@app.post(
-    "/api/usuarios",
-    response_model=UsuarioOut,
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_201_CREATED,
-    tags=["Usuarios"],
-)
-def create_usuario(usuario: UsuarioCreateSchema, conn=Depends(get_db)):
-    repo = UsuarioConnection(conn)
-    if repo.get_by_correo(usuario.correo):
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="El correo ya está registrado")
-
-    row = repo.create(
-        nombre=usuario.nombre,
-        correo=usuario.correo,
-        contrasena_hash=get_password_hash(usuario.contrasena),
-        rol=usuario.rol,
-        estado=usuario.estado,
-    )
-    return UsuarioOut.from_row(row)
-
-
-@app.put(
-    "/api/usuarios/{id_usuario}",
-    response_model=UsuarioOut,
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_200_OK,
-    tags=["Usuarios"],
-)
-def update_usuario(id_usuario: int, usuario: UsuarioUpdateSchema, conn=Depends(get_db)):
-    repo = UsuarioConnection(conn)
-    if not repo.get_by_id(id_usuario):
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-
-    fields = usuario.model_dump(exclude_unset=True)
-    if "contrasena" in fields:
-        fields["contrasena_hash"] = get_password_hash(fields.pop("contrasena"))
-    if "correo" in fields:
-        otro = repo.get_by_correo(fields["correo"])
-        if otro and otro["id_usuario"] != id_usuario:
-            raise HTTPException(status_code=HTTP_409_CONFLICT, detail="El correo ya está registrado")
-
-    row = repo.update(id_usuario, fields)
-    return UsuarioOut.from_row(row)
-
-
-@app.delete(
-    "/api/usuarios/{id_usuario}",
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_204_NO_CONTENT,
-    tags=["Usuarios"],
-)
-def delete_usuario(id_usuario: int, conn=Depends(get_db)):
-    if not UsuarioConnection(conn).delete(id_usuario):
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-
-
-@app.get(
-    "/api/propietarios",
-    response_model=List[PropietarioOut],
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_200_OK,
-    tags=["Propietarios"],
-)
-def list_propietarios(conn=Depends(get_db)):
-    rows = PropietarioConnection(conn).list_all()
-    return [PropietarioOut.from_row(row) for row in rows]
-
-
-@app.get(
-    "/api/propietarios/{id_propietario}",
-    response_model=PropietarioOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_200_OK,
-    tags=["Propietarios"],
-)
-def get_propietario(id_propietario: int, conn=Depends(get_db)):
-    row = PropietarioConnection(conn).get_by_id(id_propietario)
-    if not row:
-        raise HTTPException(status_code=404, detail="Propietario no encontrado")
-    return PropietarioOut.from_row(row)
-
-
-@app.post(
-    "/api/propietarios",
-    response_model=PropietarioOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_201_CREATED,
-    tags=["Propietarios"],
-)
-def create_propietario(propietario: PropietarioCreateSchema, conn=Depends(get_db)):
-    repo = PropietarioConnection(conn)
-    if repo.get_by_documento(propietario.documento):
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Ya existe un propietario con ese documento")
-
-    row = repo.create(
-        documento=propietario.documento,
-        nombre=propietario.nombre,
-        telefono=propietario.telefono,
-        correo=propietario.correo,
-    )
-    return PropietarioOut.from_row(row)
-
-
-@app.put(
-    "/api/propietarios/{id_propietario}",
-    response_model=PropietarioOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_200_OK,
-    tags=["Propietarios"],
-)
-def update_propietario(id_propietario: int, propietario: PropietarioUpdateSchema, conn=Depends(get_db)):
-    repo = PropietarioConnection(conn)
-    if not repo.get_by_id(id_propietario):
-        raise HTTPException(status_code=404, detail="Propietario no encontrado")
-
-    fields = propietario.model_dump(exclude_unset=True)
-    if "documento" in fields:
-        otro = repo.get_by_documento(fields["documento"])
-        if otro and otro["id_propietario"] != id_propietario:
-            raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Ya existe un propietario con ese documento")
-
-    row = repo.update(id_propietario, fields)
-    return PropietarioOut.from_row(row)
-
-
-@app.delete(
-    "/api/propietarios/{id_propietario}",
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_204_NO_CONTENT,
-    tags=["Propietarios"],
-)
-def delete_propietario(id_propietario: int, conn=Depends(get_db)):
-    """Los vehículos del propietario quedan sin propietario (ON DELETE SET NULL)."""
-    if not PropietarioConnection(conn).delete(id_propietario):
-        raise HTTPException(status_code=404, detail="Propietario no encontrado")
-
-
-@app.get(
-    "/api/vehiculos",
-    response_model=List[VehiculoOut],
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_200_OK,
-    tags=["Vehículos"],
-)
-def list_vehiculos(id_propietario: Optional[int] = Query(None), conn=Depends(get_db)):
-    rows = VehiculoConnection(conn).list_all(id_propietario=id_propietario)
-    return [VehiculoOut.from_row(row) for row in rows]
+def get_vigencia(conn, placa: str) -> Optional[dict]:
+    """Vigencia de la mensualidad según el pago más reciente de la placa, o None si no tiene pagos."""
+    ultimo = PagoConnection(conn).get_ultimo(placa)
+    if not ultimo:
+        return None
+    return calcular_vigencia(ultimo["fecha_pago"], date.today())
 
 
 @app.get(
     "/api/vehiculos/{placa}",
-    response_model=VehiculoOut,
+    response_model=VehiculoConsultaOut,
     dependencies=[Depends(get_current_active_user)],
     status_code=HTTP_200_OK,
     tags=["Vehículos"],
 )
-def get_vehiculo(placa: str, conn=Depends(get_db)):
-    row = VehiculoConnection(conn).get_by_placa(normalizar_placa(placa))
-    if not row:
-        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
-    return VehiculoOut.from_row(row)
-
-
-@app.post(
-    "/api/vehiculos",
-    response_model=VehiculoOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_201_CREATED,
-    tags=["Vehículos"],
-)
-def create_vehiculo(vehiculo: VehiculoCreateSchema, conn=Depends(get_db)):
-    repo = VehiculoConnection(conn)
-    if repo.get_by_placa(vehiculo.placa):
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="La placa ya está registrada")
-    if vehiculo.id_propietario is not None and not PropietarioConnection(conn).get_by_id(vehiculo.id_propietario):
-        raise HTTPException(status_code=404, detail="Propietario no encontrado")
-
-    row = repo.create(
-        placa=vehiculo.placa,
-        tipo_vehiculo=vehiculo.tipo_vehiculo,
-        marca=vehiculo.marca,
-        modelo=vehiculo.modelo,
-        color=vehiculo.color,
-        id_propietario=vehiculo.id_propietario,
-    )
-    return VehiculoOut.from_row(row)
-
-
-@app.put(
-    "/api/vehiculos/{placa}",
-    response_model=VehiculoOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_200_OK,
-    tags=["Vehículos"],
-)
-def update_vehiculo(placa: str, vehiculo: VehiculoUpdateSchema, conn=Depends(get_db)):
+def consultar_vehiculo(placa: str, conn=Depends(get_db)):
+    """RNF-02: el operario busca la placa y ve el usuario, la vigencia de la mensualidad y si ya está dentro."""
     placa = normalizar_placa(placa)
-    repo = VehiculoConnection(conn)
-    if not repo.get_by_placa(placa):
-        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+    vehiculo = VehiculoConnection(conn).get_by_placa(placa)
+    if not vehiculo:
+        raise HTTPException(status_code=404, detail="El vehículo no está asociado a ningún usuario registrado")
 
-    fields = vehiculo.model_dump(exclude_unset=True)
-    if fields.get("id_propietario") is not None and not PropietarioConnection(conn).get_by_id(fields["id_propietario"]):
-        raise HTTPException(status_code=404, detail="Propietario no encontrado")
-
-    row = repo.update(placa, fields)
-    return VehiculoOut.from_row(row)
-
-
-@app.delete(
-    "/api/vehiculos/{placa}",
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_204_NO_CONTENT,
-    tags=["Vehículos"],
-)
-def delete_vehiculo(placa: str, conn=Depends(get_db)):
-    """No se puede eliminar un vehículo que ya tiene tiquetes (la base responde 409)."""
-    if not VehiculoConnection(conn).delete(normalizar_placa(placa)):
-        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+    abierto = TiqueteConnection(conn).get_abierto_por_placa(placa)
+    return VehiculoConsultaOut(
+        **vehiculo,
+        mensualidad=get_vigencia(conn, placa),
+        id_tiquete_abierto=abierto["id_tiquete"] if abierto else None,
+        numero_espacio=abierto["numero_espacio"] if abierto else None,
+    )
 
 
 @app.get(
@@ -332,7 +125,7 @@ def delete_vehiculo(placa: str, conn=Depends(get_db)):
 )
 def list_espacios(
     estado: Optional[EstadoEspacio] = Query(None),
-    tipo_permitido: Optional[TipoPermitido] = Query(None),
+    tipo_permitido: Optional[TipoVehiculo] = Query(None),
     conn=Depends(get_db),
 ):
     rows = EspacioConnection(conn).list_all(estado=estado, tipo_permitido=tipo_permitido)
@@ -340,71 +133,16 @@ def list_espacios(
 
 
 @app.get(
-    "/api/espacios/{id_espacio}",
-    response_model=EspacioOut,
+    "/api/ocupacion",
+    response_model=List[OcupacionOut],
     dependencies=[Depends(get_current_active_user)],
     status_code=HTTP_200_OK,
     tags=["Espacios"],
 )
-def get_espacio(id_espacio: int, conn=Depends(get_db)):
-    row = EspacioConnection(conn).get_by_id(id_espacio)
-    if not row:
-        raise HTTPException(status_code=404, detail="Espacio no encontrado")
-    return EspacioOut.from_row(row)
-
-
-@app.post(
-    "/api/espacios",
-    response_model=EspacioOut,
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_201_CREATED,
-    tags=["Espacios"],
-)
-def create_espacio(espacio: EspacioCreateSchema, conn=Depends(get_db)):
-    repo = EspacioConnection(conn)
-    if repo.get_by_numero(espacio.numero_espacio):
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Ya existe un espacio con ese número")
-
-    row = repo.create(
-        numero_espacio=espacio.numero_espacio,
-        piso_zona=espacio.piso_zona,
-        tipo_permitido=espacio.tipo_permitido,
-        estado=espacio.estado,
-    )
-    return EspacioOut.from_row(row)
-
-
-@app.put(
-    "/api/espacios/{id_espacio}",
-    response_model=EspacioOut,
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_200_OK,
-    tags=["Espacios"],
-)
-def update_espacio(id_espacio: int, espacio: EspacioUpdateSchema, conn=Depends(get_db)):
-    repo = EspacioConnection(conn)
-    if not repo.get_by_id(id_espacio):
-        raise HTTPException(status_code=404, detail="Espacio no encontrado")
-
-    fields = espacio.model_dump(exclude_unset=True)
-    if "numero_espacio" in fields:
-        otro = repo.get_by_numero(fields["numero_espacio"])
-        if otro and otro["id_espacio"] != id_espacio:
-            raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Ya existe un espacio con ese número")
-
-    row = repo.update(id_espacio, fields)
-    return EspacioOut.from_row(row)
-
-
-@app.delete(
-    "/api/espacios/{id_espacio}",
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_204_NO_CONTENT,
-    tags=["Espacios"],
-)
-def delete_espacio(id_espacio: int, conn=Depends(get_db)):
-    if not EspacioConnection(conn).delete(id_espacio):
-        raise HTTPException(status_code=404, detail="Espacio no encontrado")
+def get_ocupacion(conn=Depends(get_db)):
+    """RF-10: celdas ocupadas y libres por tipo en tiempo real."""
+    rows = EspacioConnection(conn).ocupacion()
+    return [OcupacionOut.model_validate(row) for row in rows]
 
 
 @app.get(
@@ -414,70 +152,10 @@ def delete_espacio(id_espacio: int, conn=Depends(get_db)):
     status_code=HTTP_200_OK,
     tags=["Tarifas"],
 )
-def list_tarifas(tipo_vehiculo: Optional[TipoVehiculo] = Query(None), conn=Depends(get_db)):
-    rows = TarifaConnection(conn).list_all(tipo_vehiculo=tipo_vehiculo)
+def list_tarifas(conn=Depends(get_db)):
+    """RNF-08: el valor se configura en la tabla `tarifa`, sin cambiar el código."""
+    rows = TarifaConnection(conn).list_all()
     return [TarifaOut.from_row(row) for row in rows]
-
-
-@app.get(
-    "/api/tarifas/{id_tarifa}",
-    response_model=TarifaOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_200_OK,
-    tags=["Tarifas"],
-)
-def get_tarifa(id_tarifa: int, conn=Depends(get_db)):
-    row = TarifaConnection(conn).get_by_id(id_tarifa)
-    if not row:
-        raise HTTPException(status_code=404, detail="Tarifa no encontrada")
-    return TarifaOut.from_row(row)
-
-
-@app.post(
-    "/api/tarifas",
-    response_model=TarifaOut,
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_201_CREATED,
-    tags=["Tarifas"],
-)
-def create_tarifa(tarifa: TarifaCreateSchema, conn=Depends(get_db)):
-    row = TarifaConnection(conn).create(
-        tipo_vehiculo=tarifa.tipo_vehiculo,
-        valor_hora=tarifa.valor_hora,
-        valor_dia=tarifa.valor_dia,
-        fecha_inicio_vigencia=tarifa.fecha_inicio_vigencia,
-        estado=tarifa.estado,
-    )
-    return TarifaOut.from_row(row)
-
-
-@app.put(
-    "/api/tarifas/{id_tarifa}",
-    response_model=TarifaOut,
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_200_OK,
-    tags=["Tarifas"],
-)
-def update_tarifa(id_tarifa: int, tarifa: TarifaUpdateSchema, conn=Depends(get_db)):
-    repo = TarifaConnection(conn)
-    if not repo.get_by_id(id_tarifa):
-        raise HTTPException(status_code=404, detail="Tarifa no encontrada")
-
-    fields = tarifa.model_dump(exclude_unset=True)
-    row = repo.update(id_tarifa, fields)
-    return TarifaOut.from_row(row)
-
-
-@app.delete(
-    "/api/tarifas/{id_tarifa}",
-    dependencies=[Depends(get_current_admin_user)],
-    status_code=HTTP_204_NO_CONTENT,
-    tags=["Tarifas"],
-)
-def delete_tarifa(id_tarifa: int, conn=Depends(get_db)):
-    """Una tarifa usada por algún tiquete no se puede eliminar (409); desactívala con `estado: false`."""
-    if not TarifaConnection(conn).delete(id_tarifa):
-        raise HTTPException(status_code=404, detail="Tarifa no encontrada")
 
 
 @app.get(
@@ -489,10 +167,22 @@ def delete_tarifa(id_tarifa: int, conn=Depends(get_db)):
 )
 def list_tiquetes(
     placa: Optional[str] = Query(None),
-    abiertos: Optional[bool] = Query(None, description="true: vehículos dentro; false: tiquetes con salida"),
+    id_propietario: Optional[int] = Query(None),
+    id_espacio: Optional[int] = Query(None),
+    desde: Optional[date] = Query(None, description="Fecha de entrada desde (incluida)"),
+    hasta: Optional[date] = Query(None, description="Fecha de entrada hasta (incluida)"),
+    abiertos: Optional[bool] = Query(None, description="true: vehículos dentro (RF-12); false: registros cerrados o anulados"),
     conn=Depends(get_db),
 ):
-    rows = TiqueteConnection(conn).list_all(placa=normalizar_placa(placa) if placa else None, abiertos=abiertos)
+    """RF-11: historial de entradas y salidas con filtros."""
+    rows = TiqueteConnection(conn).list_all(
+        placa=normalizar_placa(placa) if placa else None,
+        id_propietario=id_propietario,
+        id_espacio=id_espacio,
+        desde=desde,
+        hasta=hasta,
+        abiertos=abiertos,
+    )
     return [TiqueteOut.from_row(row) for row in rows]
 
 
@@ -510,34 +200,66 @@ def get_tiquete(id_tiquete: int, conn=Depends(get_db)):
     return TiqueteOut.from_row(row)
 
 
-@app.post("/api/tiquetes/entrada", response_model=TiqueteOut, status_code=HTTP_201_CREATED, tags=["Tiquetes"])
+@app.post("/api/tiquetes/entrada", response_model=EntradaOut, status_code=HTTP_201_CREATED, tags=["Tiquetes"])
 def registrar_entrada(
-    entrada: PlacaSchema,
+    entrada: EntradaSchema,
     current_user: UsuarioOut = Depends(get_current_active_user),
     conn=Depends(get_db),
 ):
-    """Abre un tiquete y asigna automáticamente un espacio disponible del tipo del vehículo."""
+    """RF-01 a RF-07: valida vehículo, doble ingreso y mensualidad, y asigna una celda del tipo del vehículo."""
     vehiculo = VehiculoConnection(conn).get_by_placa(entrada.placa)
     if not vehiculo:
-        raise HTTPException(status_code=404, detail="Vehículo no registrado")
+        raise HTTPException(status_code=404, detail="El vehículo no está asociado a ningún usuario registrado")
 
     repo = TiqueteConnection(conn)
-    if repo.get_abierto_por_placa(entrada.placa):
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="El vehículo ya se encuentra dentro del parqueadero")
+    abierto = repo.get_abierto_por_placa(entrada.placa)
+    if abierto:
+        raise HTTPException(
+            status_code=HTTP_409_CONFLICT,
+            detail=f"El vehículo ya se encuentra dentro del parqueadero en la celda {abierto['numero_espacio']}",
+        )
 
-    tarifa = TarifaConnection(conn).get_vigente(vehiculo["tipo_vehiculo"])
-    if not tarifa:
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=f"No hay una tarifa vigente para {vehiculo['tipo_vehiculo']}")
+    vigencia = get_vigencia(conn, entrada.placa)
+    if not vigencia:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="El vehículo no tiene una mensualidad registrada")
+    if vigencia["estado"] == "Vencida":
+        raise HTTPException(
+            status_code=HTTP_409_CONFLICT,
+            detail=f"Mensualidad vencida el {formatear_fecha(vigencia['fecha_vencimiento'])}",
+        )
+
+    tipo = vehiculo["tipo_vehiculo"]
+    if entrada.id_espacio is not None:
+        espacio = EspacioConnection(conn).get_by_id(entrada.id_espacio)
+        if not espacio:
+            raise HTTPException(status_code=404, detail="Espacio no encontrado")
+        if espacio["tipo_permitido"] != tipo:
+            raise HTTPException(status_code=HTTP_409_CONFLICT, detail=f"La celda {espacio['numero_espacio']} no es para {tipo}")
 
     row = repo.registrar_entrada(
         placa=entrada.placa,
-        tipo_vehiculo=vehiculo["tipo_vehiculo"],
-        id_tarifa=tarifa["id_tarifa"],
+        tipo_vehiculo=tipo,
         id_usuario_entrada=current_user.id_usuario,
+        novedad=entrada.novedad,
+        id_espacio=entrada.id_espacio,
     )
     if not row:
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=f"No hay espacios disponibles para {vehiculo['tipo_vehiculo']}")
-    return TiqueteOut.from_row(row)
+        if entrada.id_espacio is not None:
+            raise HTTPException(status_code=HTTP_409_CONFLICT, detail="La celda elegida no está disponible")
+        # RF-06: con el cupo garantizado no debería pasar; queda en el log para el administrador.
+        logger.warning("Sin celdas disponibles para %s al registrar la entrada de %s", tipo, entrada.placa)
+        raise HTTPException(
+            status_code=HTTP_409_CONFLICT,
+            detail=f"No hay celdas disponibles para {tipo}. Avise al administrador",
+        )
+
+    alerta = mensaje_alerta(vigencia["dias_restantes"]) if vigencia["estado"] == "Por vencer" else None
+    return EntradaOut(
+        **TiqueteOut.from_row(row).model_dump(),
+        fecha_vencimiento=vigencia["fecha_vencimiento"],
+        dias_restantes=vigencia["dias_restantes"],
+        alerta=alerta,
+    )
 
 
 @app.post("/api/tiquetes/salida", response_model=TiqueteOut, status_code=HTTP_200_OK, tags=["Tiquetes"])
@@ -546,63 +268,66 @@ def registrar_salida(
     current_user: UsuarioOut = Depends(get_current_active_user),
     conn=Depends(get_db),
 ):
-    """Cierra el tiquete abierto de la placa, calcula `valor_total` y libera el espacio."""
+    """RF-08 y RF-09: cierra la entrada abierta de la placa y libera la celda."""
     repo = TiqueteConnection(conn)
     abierto = repo.get_abierto_por_placa(salida.placa)
     if not abierto:
-        raise HTTPException(status_code=404, detail="El vehículo no tiene un ingreso activo")
+        raise HTTPException(status_code=404, detail="El vehículo no tiene entrada registrada")
 
-    row = repo.registrar_salida(abierto["id_tiquete"], id_usuario_salida=current_user.id_usuario)
+    row = repo.registrar_salida(abierto["id_tiquete"], id_usuario_salida=current_user.id_usuario, novedad=salida.novedad)
     if not row:
         # Otra terminal registró la salida entre la consulta y la actualización.
         raise HTTPException(status_code=HTTP_409_CONFLICT, detail="La salida de este vehículo ya fue registrada")
     return TiqueteOut.from_row(row)
 
 
-@app.get(
-    "/api/pagos",
-    response_model=List[PagoOut],
+@app.put(
+    "/api/tiquetes/{id_tiquete}/espacio",
+    response_model=TiqueteOut,
     dependencies=[Depends(get_current_active_user)],
     status_code=HTTP_200_OK,
-    tags=["Pagos"],
+    tags=["Tiquetes"],
 )
-def list_pagos(id_tiquete: Optional[int] = Query(None), conn=Depends(get_db)):
-    rows = PagoConnection(conn).list_all(id_tiquete=id_tiquete)
-    return [PagoOut.from_row(row) for row in rows]
-
-
-@app.get(
-    "/api/pagos/{id_pago}",
-    response_model=PagoOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_200_OK,
-    tags=["Pagos"],
-)
-def get_pago(id_pago: int, conn=Depends(get_db)):
-    row = PagoConnection(conn).get_by_id(id_pago)
-    if not row:
-        raise HTTPException(status_code=404, detail="Pago no encontrado")
-    return PagoOut.from_row(row)
-
-
-@app.post(
-    "/api/pagos",
-    response_model=PagoOut,
-    dependencies=[Depends(get_current_active_user)],
-    status_code=HTTP_201_CREATED,
-    tags=["Pagos"],
-)
-def create_pago(pago: PagoCreateSchema, conn=Depends(get_db)):
-    tiquete = TiqueteConnection(conn).get_by_id(pago.id_tiquete)
+def cambiar_espacio(id_tiquete: int, cambio: CambioEspacioSchema, conn=Depends(get_db)):
+    """RF-05: el operario cambia manualmente la celda de un vehículo que está dentro."""
+    repo = TiqueteConnection(conn)
+    tiquete = repo.get_by_id(id_tiquete)
     if not tiquete:
         raise HTTPException(status_code=404, detail="Tiquete no encontrado")
-    if tiquete["fecha_hora_salida"] is None:
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Registra la salida antes de pagar el tiquete")
-    if tiquete["estado_pago"] == "Pagado":
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="El tiquete ya está pagado")
+    if tiquete["estado"] != "Activo":
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Solo se puede cambiar la celda de un vehículo que está dentro")
 
-    row = PagoConnection(conn).create(id_tiquete=pago.id_tiquete, monto=tiquete["valor_total"], metodo_pago=pago.metodo_pago)
-    return PagoOut.from_row(row)
+    espacio = EspacioConnection(conn).get_by_id(cambio.id_espacio)
+    if not espacio:
+        raise HTTPException(status_code=404, detail="Espacio no encontrado")
+    if espacio["tipo_permitido"] != tiquete["tipo_vehiculo"]:
+        raise HTTPException(
+            status_code=HTTP_409_CONFLICT,
+            detail=f"La celda {espacio['numero_espacio']} no es para {tiquete['tipo_vehiculo']}",
+        )
+
+    row = repo.cambiar_espacio(id_tiquete, cambio.id_espacio, tiquete["tipo_vehiculo"])
+    if not row:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="La celda elegida no está disponible")
+    return TiqueteOut.from_row(row)
+
+
+@app.post("/api/tiquetes/{id_tiquete}/anular", response_model=TiqueteOut, status_code=HTTP_200_OK, tags=["Tiquetes"])
+def anular_tiquete(
+    id_tiquete: int,
+    anulacion: AnulacionSchema,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
+    conn=Depends(get_db),
+):
+    """RNF-05: anula un registro con justificación; si el vehículo estaba dentro, libera la celda."""
+    repo = TiqueteConnection(conn)
+    if not repo.get_by_id(id_tiquete):
+        raise HTTPException(status_code=404, detail="Tiquete no encontrado")
+
+    row = repo.anular(id_tiquete, motivo=anulacion.motivo, id_usuario=current_user.id_usuario)
+    if not row:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail="El tiquete ya está anulado")
+    return TiqueteOut.from_row(row)
 
 
 if __name__ == "__main__":

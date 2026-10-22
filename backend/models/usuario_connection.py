@@ -2,7 +2,7 @@ from typing import Optional
 
 
 class UsuarioConnection:
-    """Operaciones CRUD sobre la tabla `usuario` usando SQL crudo."""
+    """Operaciones sobre la tabla `usuario` usando SQL crudo."""
 
     def __init__(self, conn):
         self.conn = conn
@@ -30,11 +30,6 @@ class UsuarioConnection:
             cur.execute("SELECT * FROM usuario WHERE id_usuario = %s", (id_usuario,))
             return cur.fetchone()
 
-    def list_all(self) -> list:
-        with self.conn.cursor() as cur:
-            cur.execute("SELECT * FROM usuario ORDER BY nombre")
-            return cur.fetchall()
-
     def update(self, id_usuario: int, fields: dict) -> Optional[dict]:
         """`fields` debe contener únicamente claves que sean columnas válidas de `usuario`."""
         if not fields:
@@ -45,9 +40,3 @@ class UsuarioConnection:
             cur.execute(f"UPDATE usuario SET {assignments} WHERE id_usuario = %s RETURNING *", values)
             self.conn.commit()
             return cur.fetchone()
-
-    def delete(self, id_usuario: int) -> bool:
-        with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM usuario WHERE id_usuario = %s", (id_usuario,))
-            self.conn.commit()
-            return cur.rowcount > 0
