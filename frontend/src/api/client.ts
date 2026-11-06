@@ -2,6 +2,8 @@ import type { Cell, EntryResult, HistoryFilters, Occupancy, Ticket, User, Vehicl
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const TOKEN_KEY = 'parqueate.token'
+const CELLS_STORAGE_KEY = 'parqueate.module2.cells'
+const USERS_STORAGE_KEY = 'parqueate.module2.users'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -91,3 +93,221 @@ export const registerExit = (placa: string, novedad: string | null) =>
   post<Ticket>('/api/tiquetes/salida', { placa, novedad })
 
 export const annulTicket = (id: number, motivo: string) => post<Ticket>(`/api/tiquetes/${id}/anular`, { motivo })
+
+export type UserStatus = 'Activo' | 'Inactivo'
+export type CellStatus = 'Libre' | 'Ocupada' | 'Fuera de servicio'
+
+export type UserVehicle = {
+  id: number
+  placa: string
+  tipo: VehicleType
+  marca: string
+  color: string
+  estado: UserStatus
+}
+
+export type AuditEntry = {
+  id: number
+  fecha: string
+  usuario: string
+  campo: string
+  valorAnterior: string
+  valorNuevo: string
+}
+
+export type UserRecord = {
+  id: number
+  documentoTipo: 'CC' | 'CE' | 'TI' | 'PAS'
+  documento: string
+  nombres: string
+  apellidos: string
+  celular: string
+  correo: string
+  estado: UserStatus
+  fechaRegistro: string
+  operario: string
+  autorizacionHabeasData: boolean
+  vehiculos: UserVehicle[]
+  auditLogs: AuditEntry[]
+}
+
+export type CellRecord = {
+  id: number
+  codigo: string
+  tipo: VehicleType
+  estado: CellStatus
+  placa: string | null
+  hora: string | null
+  motivo: string | null
+  historial: Array<{ id: number; momento: string; usuario: string; accion: string; motivo: string }>
+}
+
+export type UserModuleVehicle = {
+  id?: number
+  placa: string
+  tipo: 'Carro' | 'Moto'
+  marca: string
+  color: string
+  estado: 'Activo' | 'Inactivo'
+}
+
+export type UserModuleUser = {
+  id: number
+  documento: string
+  nombres: string
+  apellidos: string
+  estado: 'Activo' | 'Inactivo'
+  celular: string
+  correo: string
+  autorizacionHabeasData: boolean
+  fechaRegistro: string
+  operario: string
+  vehiculos: UserModuleVehicle[]
+}
+
+export type ParkingCell = {
+  id: number
+  codigo: string
+  tipo: 'Carro' | 'Moto'
+  estado: 'Libre' | 'Ocupada' | 'Fuera de servicio'
+  placa: string | null
+  hora: string | null
+  motivo: string | null
+  historial: Array<{
+    id: string
+    fecha: string
+    usuario: string
+    accion: string
+    motivo: string
+  }>
+}
+
+export function loadStoredCells(): CellRecord[] {
+  try {
+    const raw = localStorage.getItem(CELLS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+export function saveStoredCells(cells: CellRecord[]): void {
+  try {
+    localStorage.setItem(CELLS_STORAGE_KEY, JSON.stringify(cells))
+  } catch {
+    // Si localStorage no está disponible, se mantiene en memoria.
+  }
+}
+
+export function loadStoredUsers(): UserRecord[] {
+  try {
+    const raw = localStorage.getItem(USERS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+export function saveStoredUsers(users: UserRecord[]): void {
+  try {
+    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users))
+  } catch {
+    // Si localStorage no está disponible, se mantiene en memoria.
+  }
+}
+
+export function syncCellsWithTickets(cells: CellRecord[], openTickets: Ticket[]): CellRecord[] {
+  if (cells.length === 0) return cells
+  return cells.map((cell) => {
+    const ticket = openTickets.find((t) => t.numero_espacio === cell.codigo)
+    if (ticket) {
+      const horaIngreso = new Date(ticket.fecha_hora_entrada).toLocaleTimeString('es-CO', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+      return {
+        ...cell,
+        estado: 'Ocupada' as const,
+        placa: ticket.placa,
+        hora: horaIngreso,
+      }
+    }
+    if (cell.estado === 'Ocupada') {
+      return {
+        ...cell,
+        estado: 'Libre' as const,
+        placa: null,
+        hora: null,
+      }
+    }
+    return cell
+  })
+}
+
+export function buildInitialCells(operatorName: string, openTickets: Ticket[] = []): CellRecord[] {
+  const nowIso = new Date().toISOString()
+  const baseCells: CellRecord[] = []
+  for (let i = 1; i <= 70; i += 1) {
+    const codigo = `C-${String(i).padStart(2, '0')}`
+    baseCells.push({
+      id: i,
+      codigo,
+      tipo: 'Carro',
+      estado: 'Libre',
+      placa: null,
+      hora: null,
+      motivo: null,
+      historial: [{ id: Date.now() + i, momento: nowIso, usuario: operatorName, accion: 'Configuración inicial', motivo: 'Celda creada y habilitada.' }],
+    })
+  }
+  for (let i = 1; i <= 10; i += 1) {
+    const codigo = `M-${String(i).padStart(2, '0')}`
+    baseCells.push({
+      id: 100 + i,
+      codigo,
+      tipo: 'Moto',
+      estado: 'Libre',
+      placa: null,
+      hora: null,
+      motivo: null,
+      historial: [{ id: Date.now() + 100 + i, momento: nowIso, usuario: operatorName, accion: 'Configuración inicial', motivo: 'Celda creada y habilitada.' }],
+    })
+  }
+  return syncCellsWithTickets(baseCells, openTickets)
+}
+
+export const initializeParkingCells = (): ParkingCell[] => {
+  const carCells: ParkingCell[] = Array.from({ length: 70 }, (_, index) => {
+    const codigo = `C-${String(index + 1).padStart(2, '0')}`
+    return {
+      id: index + 1,
+      codigo,
+      tipo: 'Carro',
+      estado: 'Libre',
+      placa: null,
+      hora: null,
+      motivo: null,
+      historial: [{ id: `hist-${codigo}`, fecha: new Date().toISOString(), usuario: 'Administrador', accion: 'Configuración inicial', motivo: 'Celda creada y habilitada.' }],
+    }
+  })
+
+  const motoCells: ParkingCell[] = Array.from({ length: 10 }, (_, index) => {
+    const codigo = `M-${String(index + 1).padStart(2, '0')}`
+    return {
+      id: 100 + index + 1,
+      codigo,
+      tipo: 'Moto',
+      estado: 'Libre',
+      placa: null,
+      hora: null,
+      motivo: null,
+      historial: [{ id: `hist-${codigo}`, fecha: new Date().toISOString(), usuario: 'Administrador', accion: 'Configuración inicial', motivo: 'Celda creada y habilitada.' }],
+    }
+  })
+
+  return [...carCells, ...motoCells]
+}
