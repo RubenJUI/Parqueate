@@ -11,3 +11,6 @@ vite.config.*.timestamp-*
 logs/
 *.log
 .tmp-*
+
+.venv/
+venv/
