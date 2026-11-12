@@ -61,6 +61,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 const post = <T,>(path: string, data: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(data) })
+const put = <T,>(path: string, data: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(data) })
+const patch = <T,>(path: string, data: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(data) })
+const del = <T,>(path: string) => request<T>(path, { method: 'DELETE' })
 
 export async function login(correo: string, contrasena: string): Promise<User> {
   const form = new URLSearchParams({ username: correo, password: contrasena })
@@ -104,6 +107,8 @@ export type UserVehicle = {
   marca: string
   color: string
   estado: UserStatus
+  tieneEntradaAbierta?: boolean
+  celdaOcupada?: string | null
 }
 
 export type AuditEntry = {
@@ -113,6 +118,8 @@ export type AuditEntry = {
   campo: string
   valorAnterior: string
   valorNuevo: string
+  motivo?: string | null
+  placa?: string | null
 }
 
 export type UserRecord = {
@@ -127,6 +134,7 @@ export type UserRecord = {
   fechaRegistro: string
   operario: string
   autorizacionHabeasData: boolean
+  tieneEntradaAbierta?: boolean
   vehiculos: UserVehicle[]
   auditLogs: AuditEntry[]
 }
@@ -182,6 +190,75 @@ export type ParkingCell = {
   }>
 }
 
+// ============================================================================
+// ENDPOINTS REALES DEL MÓDULO 2 (USUARIOS Y CELDAS)
+// ============================================================================
+
+export const getModule2Users = () => request<UserRecord[]>('/api/usuarios')
+
+export const createModule2User = (data: {
+  documentoTipo: UserRecord['documentoTipo']
+  documento: string
+  nombres: string
+  apellidos: string
+  celular: string
+  correo: string
+  tipo: VehicleType
+  placa: string
+  marca: string
+  color: string
+  autorizacionHabeasData: boolean
+}) => post<UserRecord>('/api/usuarios', data)
+
+export const updateModule2User = (
+  id: number,
+  data: {
+    celular: string
+    correo: string
+    id_vehiculo?: number | null
+    placa_vehiculo?: string
+    marca?: string
+    color?: string
+  },
+) => put<UserRecord>(`/api/usuarios/${id}`, data)
+
+export const addModule2Vehicle = (
+  userId: number,
+  data: { placa: string; tipo: VehicleType; marca: string; color: string },
+) => post<UserRecord>(`/api/usuarios/${userId}/vehiculos`, data)
+
+export const toggleModule2UserStatus = (
+  userId: number,
+  data: { estado?: UserStatus; motivo: string },
+) => patch<UserRecord>(`/api/usuarios/${userId}/estado`, data)
+
+export const toggleModule2VehicleStatus = (
+  placa: string,
+  data: { estado?: UserStatus; motivo: string },
+) => patch<UserRecord>(`/api/vehiculos/${encodeURIComponent(placa)}/estado`, data)
+
+export const deleteModule2Vehicle = (placa: string) =>
+  del<UserRecord>(`/api/vehiculos/${encodeURIComponent(placa)}`)
+
+export const deleteModule2User = (userId: number) =>
+  del<{ id: number; eliminado: boolean; detalle: string }>(`/api/usuarios/${userId}`)
+
+export const getModule2Cells = () => request<CellRecord[]>('/api/celdas')
+
+export const initializeModule2Cells = () => post<CellRecord[]>('/api/celdas/inicializar', {})
+
+export const createModule2Cell = (data: { codigo: string; tipo: VehicleType }) =>
+  post<CellRecord>('/api/celdas', data)
+
+export const updateModule2Cell = (
+  codigo: string,
+  data: { estado?: 'Libre' | 'Fuera de servicio'; tipo?: VehicleType; motivo: string },
+) => patch<CellRecord>(`/api/celdas/${encodeURIComponent(codigo)}`, data)
+
+export const deleteModule2Cell = (codigo: string) =>
+  del<{ codigo: string; eliminado: boolean; detalle: string }>(`/api/celdas/${encodeURIComponent(codigo)}`)
+
+// Helpers de respaldo local
 export function loadStoredCells(): CellRecord[] {
   try {
     const raw = localStorage.getItem(CELLS_STORAGE_KEY)
@@ -278,36 +355,4 @@ export function buildInitialCells(operatorName: string, openTickets: Ticket[] = 
     })
   }
   return syncCellsWithTickets(baseCells, openTickets)
-}
-
-export const initializeParkingCells = (): ParkingCell[] => {
-  const carCells: ParkingCell[] = Array.from({ length: 70 }, (_, index) => {
-    const codigo = `C-${String(index + 1).padStart(2, '0')}`
-    return {
-      id: index + 1,
-      codigo,
-      tipo: 'Carro',
-      estado: 'Libre',
-      placa: null,
-      hora: null,
-      motivo: null,
-      historial: [{ id: `hist-${codigo}`, fecha: new Date().toISOString(), usuario: 'Administrador', accion: 'Configuración inicial', motivo: 'Celda creada y habilitada.' }],
-    }
-  })
-
-  const motoCells: ParkingCell[] = Array.from({ length: 10 }, (_, index) => {
-    const codigo = `M-${String(index + 1).padStart(2, '0')}`
-    return {
-      id: 100 + index + 1,
-      codigo,
-      tipo: 'Moto',
-      estado: 'Libre',
-      placa: null,
-      hora: null,
-      motivo: null,
-      historial: [{ id: `hist-${codigo}`, fecha: new Date().toISOString(), usuario: 'Administrador', accion: 'Configuración inicial', motivo: 'Celda creada y habilitada.' }],
-    }
-  })
-
-  return [...carCells, ...motoCells]
 }

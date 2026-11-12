@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import logging
 from datetime import date
 from typing import List, Optional
@@ -7,18 +8,34 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from psycopg2 import errors
+from psycopg2.extras import RealDictCursor
 from starlette.status import HTTP_200_OK, HTTP_201_CREATED, HTTP_409_CONFLICT
 
 from auth.auth import get_current_active_user, get_current_admin_user
 from auth.auth_routes import router as auth_router
 from config import ALLOWED_ORIGINS
-from database.database import get_db
+from database.database import DATABASE_URL, get_db
 from models.espacio_connection import EspacioConnection
+from models.modulo2_connection import (
+    Modulo2CeldaConnection,
+    Modulo2UsuarioConnection,
+    ensure_module2_schema,
+)
 from models.pago_connection import PagoConnection, calcular_vigencia
 from models.tarifa_connection import TarifaConnection
 from models.tiquete_connection import TiqueteConnection
 from models.vehiculo_connection import VehiculoConnection
 from schema.espacio_schema import EspacioOut, OcupacionOut
+from schema.modulo2_schema import (
+    CambioEstadoSchema,
+    CeldaActualizarSchema,
+    CeldaCrearSchema,
+    CeldaModulo2Out,
+    UsuarioCrearSchema,
+    UsuarioEditarSchema,
+    UsuarioModulo2Out,
+    VehiculoAsociarSchema,
+)
 from schema.tarifa_schema import TarifaOut
 from schema.tipos import EstadoEspacio, TipoVehiculo, normalizar_placa
 from schema.tiquete_schema import AnulacionSchema, CambioEspacioSchema, EntradaOut, EntradaSchema, PlacaSchema, TiqueteOut
@@ -27,9 +44,10 @@ from schema.vehiculo_schema import VehiculoConsultaOut
 
 tags_metadata = [
     {"name": "auth", "description": "Login y emisión del token JWT."},
-    {"name": "Usuarios", "description": "Operario autenticado."},
+    {"name": "Usuarios", "description": "Operario autenticado y gestión de usuarios del parqueadero."},
     {"name": "Vehículos", "description": "Consulta por placa: usuario, mensualidad y si está dentro."},
     {"name": "Espacios", "description": "Celdas del parqueadero y ocupación."},
+    {"name": "Celdas", "description": "Gestión de celdas, mantenimiento y trazabilidad (Módulo 2)."},
     {"name": "Tarifas", "description": "Valor de la mensualidad por tipo de vehículo."},
     {"name": "Tiquetes", "description": "Registro de entradas y salidas, historial y anulaciones."},
     {"name": "Sistema", "description": "Endpoints de estado del servicio."},
@@ -37,7 +55,22 @@ tags_metadata = [
 
 logger = logging.getLogger("parqueate")
 
-app = FastAPI(title="Parqueate - Autos Colombia API", openapi_tags=tags_metadata)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Ejecuta la migración retrocompatible del Módulo 2 al iniciar el servidor."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        try:
+            ensure_module2_schema(conn)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("No se pudo ejecutar la migración automática al iniciar: %s", exc)
+    yield
+
+
+app = FastAPI(title="Parqueate - Autos Colombia API", openapi_tags=tags_metadata, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +94,16 @@ def integrity_error_handler(request: Request, exc: psycopg2.IntegrityError):
     else:
         detail = "Los datos no cumplen las restricciones de la base de datos"
     return JSONResponse(status_code=HTTP_409_CONFLICT, content={"detail": detail})
+
+
+@app.exception_handler(Exception)
+def unhandled_exception_handler(request: Request, exc: Exception):
+    """Garantiza que cualquier error inesperado devuelva un JSON controlado con cabeceras CORS."""
+    logger.exception("Error inesperado procesando %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Error interno al procesar la operación: {str(exc)}"},
+    )
 
 
 @app.get("/", status_code=HTTP_200_OK, tags=["Sistema"])
@@ -328,6 +371,214 @@ def anular_tiquete(
     if not row:
         raise HTTPException(status_code=HTTP_409_CONFLICT, detail="El tiquete ya está anulado")
     return TiqueteOut.from_row(row)
+
+
+# ==============================================================================
+# ENDPOINTS DEL MÓDULO 2: GESTIÓN DE USUARIOS, VEHÍCULOS (1 a N) Y CELDAS
+# ==============================================================================
+
+
+@app.get(
+    "/api/usuarios",
+    response_model=List[UsuarioModulo2Out],
+    dependencies=[Depends(get_current_active_user)],
+    status_code=HTTP_200_OK,
+    tags=["Usuarios"],
+)
+def listar_usuarios_modulo2(conn=Depends(get_db)):
+    """Retorna los usuarios registrados con sus vehículos asociados (1 a N), bitácora de auditoría y estado de ingreso."""
+    return Modulo2UsuarioConnection(conn).list_usuarios()
+
+
+@app.post(
+    "/api/usuarios",
+    response_model=UsuarioModulo2Out,
+    status_code=HTTP_201_CREATED,
+    tags=["Usuarios"],
+)
+def crear_usuario_modulo2(
+    datos: UsuarioCrearSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Registra un usuario y su primer vehículo en una sola transacción validando documento, placa y Habeas Data."""
+    return Modulo2UsuarioConnection(conn).crear_usuario_con_vehiculo(datos, usuario_responsable=current_user.nombre)
+
+
+@app.put(
+    "/api/usuarios/{id_propietario:int}",
+    response_model=UsuarioModulo2Out,
+    status_code=HTTP_200_OK,
+    tags=["Usuarios"],
+)
+def editar_usuario_modulo2(
+    id_propietario: int,
+    datos: UsuarioEditarSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Permite editar celular, correo, marca y color (bloqueando cambios en documento y placa) con trazabilidad."""
+    return Modulo2UsuarioConnection(conn).editar_usuario(id_propietario, datos, usuario_responsable=current_user.nombre)
+
+
+@app.post(
+    "/api/usuarios/{id_propietario:int}/vehiculos",
+    response_model=UsuarioModulo2Out,
+    status_code=HTTP_201_CREATED,
+    tags=["Usuarios"],
+)
+def asociar_vehiculo_modulo2(
+    id_propietario: int,
+    datos: VehiculoAsociarSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Asocia un vehículo adicional a un usuario existente validando placa única y formato según tipo."""
+    return Modulo2UsuarioConnection(conn).asociar_vehiculo(id_propietario, datos, usuario_responsable=current_user.nombre)
+
+
+@app.patch(
+    "/api/usuarios/{id_propietario:int}/estado",
+    response_model=UsuarioModulo2Out,
+    status_code=HTTP_200_OK,
+    tags=["Usuarios"],
+)
+def cambiar_estado_usuario_modulo2(
+    id_propietario: int,
+    datos: CambioEstadoSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Inactiva o reactiva un usuario exigiendo motivo obligatorio y bloqueando si tiene vehículo dentro (RN-U06)."""
+    return Modulo2UsuarioConnection(conn).cambiar_estado_usuario(
+        id_propietario, datos, usuario_responsable=current_user.nombre
+    )
+
+
+@app.patch(
+    "/api/vehiculos/{placa}/estado",
+    response_model=UsuarioModulo2Out,
+    status_code=HTTP_200_OK,
+    tags=["Vehículos"],
+)
+def cambiar_estado_vehiculo_modulo2(
+    placa: str,
+    datos: CambioEstadoSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Inactiva o reactiva un vehículo exigiendo motivo obligatorio y bloqueando si tiene entrada abierta (RN-U06)."""
+    return Modulo2UsuarioConnection(conn).cambiar_estado_vehiculo(
+        placa, datos, usuario_responsable=current_user.nombre
+    )
+
+
+@app.delete(
+    "/api/vehiculos/{placa}",
+    response_model=UsuarioModulo2Out,
+    status_code=HTTP_200_OK,
+    tags=["Vehículos"],
+)
+def eliminar_vehiculo_modulo2(
+    placa: str,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Retira o elimina un vehículo de un usuario cuando ya no pertenece al propietario, bloqueando si está dentro."""
+    return Modulo2UsuarioConnection(conn).eliminar_vehiculo(
+        placa, usuario_responsable=current_user.nombre
+    )
+
+
+@app.delete(
+    "/api/usuarios/{id_propietario:int}",
+    status_code=HTTP_200_OK,
+    tags=["Usuarios"],
+)
+def eliminar_usuario_modulo2(
+    id_propietario: int,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Elimina un usuario y sus vehículos asociados siempre que ninguno esté dentro del parqueadero."""
+    return Modulo2UsuarioConnection(conn).eliminar_usuario(
+        id_propietario, usuario_responsable=current_user.nombre
+    )
+
+
+@app.get(
+    "/api/celdas",
+    response_model=List[CeldaModulo2Out],
+    dependencies=[Depends(get_current_active_user)],
+    status_code=HTTP_200_OK,
+    tags=["Celdas"],
+)
+def listar_celdas_modulo2(conn=Depends(get_db)):
+    """Retorna todas las celdas reales desde `espacio` cruzadas con entradas abiertas e historial de trazabilidad."""
+    return Modulo2CeldaConnection(conn).list_celdas()
+
+
+@app.post(
+    "/api/celdas/inicializar",
+    response_model=List[CeldaModulo2Out],
+    status_code=HTTP_200_OK,
+    tags=["Celdas"],
+)
+def inicializar_celdas_modulo2(
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Crea o asegura las 70 celdas de carro (C-01 a C-70) y 10 de moto (M-01 a M-10) sin borrar las existentes."""
+    return Modulo2CeldaConnection(conn).inicializar_celdas(usuario_responsable=current_user.nombre)
+
+
+@app.post(
+    "/api/celdas",
+    response_model=CeldaModulo2Out,
+    status_code=HTTP_201_CREATED,
+    tags=["Celdas"],
+)
+def crear_celda_modulo2(
+    datos: CeldaCrearSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Crea una celda nueva validando código único y registrando su creación en `historial_celda`."""
+    return Modulo2CeldaConnection(conn).crear_celda(datos, usuario_responsable=current_user.nombre)
+
+
+@app.patch(
+    "/api/celdas/{codigo}",
+    response_model=CeldaModulo2Out,
+    status_code=HTTP_200_OK,
+    tags=["Celdas"],
+)
+def actualizar_celda_modulo2(
+    codigo: str,
+    datos: CeldaActualizarSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """Permite cambiar el estado operativo o el tipo de una celda libre validando cupo garantizado y motivo obligatorio."""
+    return Modulo2CeldaConnection(conn).actualizar_celda(
+        codigo, datos, usuario_responsable=current_user.nombre
+    )
+
+
+@app.delete(
+    "/api/celdas/{codigo}",
+    status_code=HTTP_200_OK,
+    tags=["Celdas"],
+)
+def eliminar_celda_modulo2(
+    codigo: str,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
+    conn=Depends(get_db),
+):
+    """Elimina una celda libre del parqueadero (solo Administrador) validando cupo mínimo garantizado."""
+    return Modulo2CeldaConnection(conn).eliminar_celda(
+        codigo, usuario_responsable=current_user.nombre
+    )
 
 
 if __name__ == "__main__":

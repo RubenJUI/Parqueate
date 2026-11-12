@@ -1,15 +1,24 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useState } from 'react'
 import {
+  addModule2Vehicle,
   annulTicket,
   ApiError,
   buildInitialCells,
   checkHealth,
+  createModule2Cell,
+  createModule2User,
+  deleteModule2Cell,
+  deleteModule2User,
+  deleteModule2Vehicle,
   getFreeCells,
   getHistory,
   getInside,
   getMe,
+  getModule2Cells,
+  getModule2Users,
   getOccupancy,
   getToken,
+  initializeModule2Cells,
   loadStoredCells,
   loadStoredUsers,
   login,
@@ -21,9 +30,13 @@ import {
   saveStoredUsers,
   setUnauthorizedHandler,
   syncCellsWithTickets,
+  toggleModule2UserStatus,
+  toggleModule2VehicleStatus,
+  updateModule2Cell,
+  updateModule2User,
 } from './api/client'
 import type { Cell, EntryResult, Occupancy, OpTab, Ticket, User, VehicleLookup, VehicleType } from './domain/parking'
-import type { AuditEntry, CellRecord, CellStatus, UserRecord, UserStatus, UserVehicle } from './api/client'
+import type { CellRecord, CellStatus, UserRecord, UserStatus } from './api/client'
 import { formatDate, formatDateTime, initials, ticketCode, todayLong } from './shared/formatters'
 
 const errorMessage = (error: unknown) => error instanceof ApiError ? error.message : 'Ocurrió un error inesperado'
@@ -136,13 +149,18 @@ function Operations({
 
   const refreshOperationalState = useCallback(() => {
     getOccupancy().then(setOccupancy).catch(() => {})
-    getInside()
-      .then((tickets) => {
+    getModule2Users().then(setUsers).catch(() => {})
+    Promise.all([getInside(), getModule2Cells().catch(() => null)])
+      .then(([tickets, apiCells]) => {
         setOpenTickets(tickets)
-        setCells((prev) => syncCellsWithTickets(prev, tickets))
+        if (apiCells) {
+          setCells(syncCellsWithTickets(apiCells, tickets))
+        } else {
+          setCells((prev) => syncCellsWithTickets(prev, tickets))
+        }
       })
       .catch(() => {})
-  }, [setCells])
+  }, [setCells, setUsers])
 
   // RF-10: ocupación y tiquetes abiertos en tiempo real; se actualizan tras cada movimiento y cada 15 segundos.
   useEffect(() => {
@@ -563,12 +581,41 @@ function UsersModule({
   const [vehicleModalUser, setVehicleModalUser] = useState<UserRecord | null>(null)
   const [vehicleModalForm, setVehicleModalForm] = useState({ placa: '', tipo: 'Carro' as VehicleType, marca: '', color: '' })
   const [auditModalUser, setAuditModalUser] = useState<UserRecord | null>(null)
+  const [openActionsUserId, setOpenActionsUserId] = useState<number | null>(null)
+  const [confirmDeleteModal, setConfirmDeleteModal] = useState<{
+    kind: 'user' | 'vehicle' | 'cell'
+    targetId: number | string
+    title: string
+    description: string
+  } | null>(null)
+  const [deleteModalError, setDeleteModalError] = useState('')
 
-  const initializeCells = () => {
-    const nextCells = buildInitialCells(currentOperatorName, openTickets)
-    setCells(nextCells)
-    setSelectedCellCode(nextCells[0]?.codigo ?? null)
+  useEffect(() => {
+    if (openActionsUserId === null) return
+    const closeMenu = () => setOpenActionsUserId(null)
+    document.addEventListener('mousedown', closeMenu)
+    return () => document.removeEventListener('mousedown', closeMenu)
+  }, [openActionsUserId])
+
+  const initializeCells = async () => {
+    try {
+      const apiCells = await initializeModule2Cells()
+      const synced = syncCellsWithTickets(apiCells, openTickets)
+      setCells(synced)
+      setSelectedCellCode(synced[0]?.codigo ?? null)
+    } catch {
+      const nextCells = buildInitialCells(currentOperatorName, openTickets)
+      setCells(nextCells)
+      setSelectedCellCode(nextCells[0]?.codigo ?? null)
+    }
   }
+
+  useEffect(() => {
+    getModule2Users().then(setUsers).catch(() => {})
+    getModule2Cells()
+      .then((apiCells) => setCells(syncCellsWithTickets(apiCells, openTickets)))
+      .catch(() => {})
+  }, [subView, openTickets, setCells, setUsers])
 
   // Busca si una placa tiene una entrada abierta en el parqueadero (Módulo 1 o celda ocupada en el mapa)
   const findOpenEntryForPlate = (placa: string): { placa: string; celda: string } | null => {
@@ -577,12 +624,21 @@ function UsersModule({
     if (fromTicket) return { placa: fromTicket.placa, celda: fromTicket.numero_espacio }
     const fromCell = cells.find((c) => c.estado === 'Ocupada' && c.placa?.toUpperCase() === normalized)
     if (fromCell) return { placa: normalized, celda: fromCell.codigo }
+    for (const u of users) {
+      const veh = u.vehiculos.find((v) => v.placa.toUpperCase() === normalized && v.tieneEntradaAbierta && v.celdaOcupada)
+      if (veh && veh.celdaOcupada) return { placa: veh.placa, celda: veh.celdaOcupada }
+    }
     return null
   }
 
   const filteredUsers = users.filter((u) => {
     const text = `${u.documentoTipo} ${u.documento} ${u.nombres} ${u.apellidos} ${u.vehiculos.map(v => v.placa).join(' ')}`.toLowerCase()
-    const stateOk = estadoFilter === 'Todos' || (estadoFilter === 'Activos' ? u.estado === 'Activo' : u.estado === 'Inactivo')
+    const hasInactiveVehicle = u.vehiculos.some((v) => v.estado === 'Inactivo')
+    const stateOk =
+      estadoFilter === 'Todos' ||
+      (estadoFilter === 'Activos'
+        ? u.estado === 'Activo'
+        : u.estado === 'Inactivo' || hasInactiveVehicle)
     const typeOk = vehiculoFilter === 'Todos' || u.vehiculos.some(v => (vehiculoFilter === 'Carros' ? v.tipo === 'Carro' : v.tipo === 'Moto'))
     return (!search || text.includes(search.toLowerCase())) && stateOk && typeOk
   })
@@ -610,7 +666,7 @@ function UsersModule({
   const carActiveSubscriptions = Math.max(activeCarVehiclesCount, carOccupiedCount)
   const motoActiveSubscriptions = Math.max(activeMotoVehiclesCount, motoOccupiedCount)
 
-  const createUser = () => {
+  const createUser = async () => {
     const { documentoTipo, documento, nombres, apellidos, celular, correo, tipo, placa, marca, color, habeas } = registerForm
     const trimmedDoc = documento.trim()
     const trimmedNames = nombres.trim()
@@ -629,49 +685,33 @@ function UsersModule({
       setRegisterError(tipo === 'Carro' ? 'La placa no corresponde al formato de carro (ej. ABC123)' : 'La placa no corresponde al formato de moto (ej. ABC12D)')
       return
     }
-    const duplicatedDocument = users.find((u) => u.documento === trimmedDoc)
-    if (duplicatedDocument) {
-      setRegisterError(`El documento ${duplicatedDocument.documentoTipo} ${trimmedDoc} ya está registrado para ${duplicatedDocument.nombres} ${duplicatedDocument.apellidos}.`)
-      return
-    }
-    const duplicatedPlate = users.some((u) => u.vehiculos.some((vehicle) => vehicle.placa === plate))
-    if (duplicatedPlate) {
-      setRegisterError(`La placa ${plate} ya está registrada en otro usuario del sistema.`)
-      return
-    }
 
-    const nowIso = new Date().toISOString()
-    const newUser: UserRecord = {
-      id: Date.now(),
-      documentoTipo,
-      documento: trimmedDoc,
-      nombres: trimmedNames,
-      apellidos: trimmedLast,
-      celular: celular.trim(),
-      correo: correo.trim(),
-      estado: 'Activo',
-      fechaRegistro: nowIso,
-      operario: currentOperatorName,
-      autorizacionHabeasData: true,
-      vehiculos: [{ id: Date.now() + 1, placa: plate, tipo, marca: marca.trim(), color: color.trim(), estado: 'Activo' }],
-      auditLogs: [{
-        id: Date.now() + 2,
-        fecha: nowIso,
-        usuario: currentOperatorName,
-        campo: 'Registro inicial (Usuario + Vehículo + Habeas Data)',
-        valorAnterior: 'Sin registro',
-        valorNuevo: `${documentoTipo} ${trimmedDoc} · ${trimmedNames} ${trimmedLast} · Vehículo ${plate} (${tipo})`,
-      }],
+    try {
+      const created = await createModule2User({
+        documentoTipo,
+        documento: trimmedDoc,
+        nombres: trimmedNames,
+        apellidos: trimmedLast,
+        celular: celular.trim(),
+        correo: correo.trim(),
+        tipo,
+        placa: plate,
+        marca: marca.trim(),
+        color: color.trim(),
+        autorizacionHabeasData: true,
+      })
+      setUsers((prev) => [created, ...prev.filter((u) => u.id !== created.id)])
+      setSubView('directory')
+      setRegisterForm({ documentoTipo: 'CC', documento: '', nombres: '', apellidos: '', celular: '', correo: '', tipo: 'Carro', placa: '', marca: '', color: '', habeas: false })
+      setRegisterError('')
+      setRegisterSuccess('Usuario y vehículo registrados satisfactoriamente.')
+      setTimeout(() => setRegisterSuccess(''), 2600)
+    } catch (err) {
+      setRegisterError(errorMessage(err))
     }
-    setUsers((prev) => [newUser, ...prev])
-    setSubView('directory')
-    setRegisterForm({ documentoTipo: 'CC', documento: '', nombres: '', apellidos: '', celular: '', correo: '', tipo: 'Carro', placa: '', marca: '', color: '', habeas: false })
-    setRegisterError('')
-    setRegisterSuccess('Usuario y vehículo registrados satisfactoriamente.')
-    setTimeout(() => setRegisterSuccess(''), 2600)
   }
 
-  const saveUserEdits = () => {
+  const saveUserEdits = async () => {
     if (!editingUser || editingVehicleId === null) return
     const currentVehicle = editingUser.vehiculos.find((item) => item.id === editingVehicleId)
     if (!currentVehicle) return
@@ -686,61 +726,26 @@ function UsersModule({
       return
     }
 
-    const prevCelular = editingUser.celular
-    const prevCorreo = editingUser.correo || 'Sin correo'
-    const prevMarca = currentVehicle.marca
-    const prevColor = currentVehicle.color
-
-    const newLogs: AuditEntry[] = []
-    const nowIso = new Date().toISOString()
-
-    if (prevCelular !== nextCelular || editingUser.correo !== nextCorreo) {
-      newLogs.push({
-        id: Date.now() + 1,
-        fecha: nowIso,
-        usuario: currentOperatorName,
-        campo: 'Datos de contacto (Celular / Correo)',
-        valorAnterior: `${prevCelular} / ${prevCorreo}`,
-        valorNuevo: `${nextCelular} / ${nextCorreo || 'Sin correo'}`,
+    try {
+      const updatedUser = await updateModule2User(editingUser.id, {
+        celular: nextCelular,
+        correo: nextCorreo,
+        id_vehiculo: currentVehicle.id,
+        placa_vehiculo: currentVehicle.placa,
+        marca: nextMarca,
+        color: nextColor,
       })
-    }
-
-    if (prevMarca !== nextMarca || prevColor !== nextColor) {
-      newLogs.push({
-        id: Date.now() + 2,
-        fecha: nowIso,
-        usuario: currentOperatorName,
-        campo: `Vehículo ${currentVehicle.placa} (Marca / Color)`,
-        valorAnterior: `${prevMarca} · ${prevColor}`,
-        valorNuevo: `${nextMarca} · ${nextColor}`,
-      })
-    }
-
-    if (newLogs.length === 0) {
+      setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)))
       setEditingUser(null)
       setEditingVehicleId(null)
+      setEditForm({ celular: '', correo: '', marca: '', color: '' })
       setEditError('')
-      return
+    } catch (err) {
+      setEditError(errorMessage(err))
     }
-
-    const updatedUser: UserRecord = {
-      ...editingUser,
-      celular: nextCelular,
-      correo: nextCorreo,
-      vehiculos: editingUser.vehiculos.map((v) =>
-        v.id === editingVehicleId ? { ...v, marca: nextMarca, color: nextColor } : v
-      ),
-      auditLogs: [...newLogs, ...editingUser.auditLogs],
-    }
-
-    setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)))
-    setEditingUser(null)
-    setEditingVehicleId(null)
-    setEditForm({ celular: '', correo: '', marca: '', color: '' })
-    setEditError('')
   }
 
-  const addVehicleToUser = () => {
+  const addVehicleToUser = async () => {
     if (!vehicleModalUser) return
     const plate = vehicleModalForm.placa.trim().toUpperCase()
     const marca = vehicleModalForm.marca.trim()
@@ -755,40 +760,24 @@ function UsersModule({
       setModalError(vehicleModalForm.tipo === 'Carro' ? 'La placa no corresponde al formato de carro (ej. ABC123)' : 'La placa no corresponde al formato de moto (ej. ABC12D)')
       return
     }
-    if (users.some((u) => u.vehiculos.some((vehicle) => vehicle.placa === plate))) {
-      setModalError(`La placa ${plate} ya está registrada en el sistema.`)
-      return
+
+    try {
+      const updatedUser = await addModule2Vehicle(vehicleModalUser.id, {
+        placa: plate,
+        tipo: vehicleModalForm.tipo,
+        marca,
+        color,
+      })
+      setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)))
+      setVehicleModalUser(null)
+      setVehicleModalForm({ placa: '', tipo: 'Carro', marca: '', color: '' })
+      setModalError('')
+    } catch (err) {
+      setModalError(errorMessage(err))
     }
-    const nowIso = new Date().toISOString()
-    const newVehicle: UserVehicle = {
-      id: Date.now(),
-      placa: plate,
-      tipo: vehicleModalForm.tipo,
-      marca,
-      color,
-      estado: 'Activo',
-    }
-    const newAudit: AuditEntry = {
-      id: Date.now() + 1,
-      fecha: nowIso,
-      usuario: currentOperatorName,
-      campo: `Asociación de vehículo (${plate})`,
-      valorAnterior: 'Sin registro',
-      valorNuevo: `${plate} · ${vehicleModalForm.tipo} · ${marca} · ${color}`,
-    }
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === vehicleModalUser.id
-          ? { ...u, vehiculos: [...u.vehiculos, newVehicle], auditLogs: [newAudit, ...u.auditLogs] }
-          : u
-      )
-    )
-    setVehicleModalUser(null)
-    setVehicleModalForm({ placa: '', tipo: 'Carro', marca: '', color: '' })
-    setModalError('')
   }
 
-  const toggleUserState = () => {
+  const toggleUserState = async () => {
     if (!modalUserAction) return
     const targetUser = users.find((u) => u.id === modalUserAction.userId)
     if (!targetUser) return
@@ -799,82 +788,33 @@ function UsersModule({
       return
     }
 
-    const nowIso = new Date().toISOString()
-
-    if (modalUserAction.kind === 'user') {
-      const nextState: UserStatus = targetUser.estado === 'Activo' ? 'Inactivo' : 'Activo'
-      if (nextState === 'Inactivo') {
-        for (const v of targetUser.vehiculos) {
-          const openEntry = findOpenEntryForPlate(v.placa)
-          if (openEntry) {
-            setModalError(`No se puede inactivar al usuario porque el vehículo ${openEntry.placa} tiene una entrada abierta en la celda ${openEntry.celda}.`)
-            return
-          }
-        }
+    try {
+      if (modalUserAction.kind === 'user') {
+        const nextState: UserStatus = targetUser.estado === 'Activo' ? 'Inactivo' : 'Activo'
+        const updatedUser = await toggleModule2UserStatus(targetUser.id, {
+          estado: nextState,
+          motivo: reason,
+        })
+        setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)))
+      } else {
+        const targetVehicle = targetUser.vehiculos.find((vehicle) => vehicle.id === modalUserAction.vehicleId)
+        if (!targetVehicle) return
+        const updatedVehicleState: UserStatus = targetVehicle.estado === 'Activo' ? 'Inactivo' : 'Activo'
+        const updatedUser = await toggleModule2VehicleStatus(targetVehicle.placa, {
+          estado: updatedVehicleState,
+          motivo: reason,
+        })
+        setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)))
       }
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === modalUserAction.userId
-            ? {
-                ...u,
-                estado: nextState,
-                auditLogs: [
-                  {
-                    id: Date.now(),
-                    fecha: nowIso,
-                    usuario: currentOperatorName,
-                    campo: 'Estado de usuario',
-                    valorAnterior: u.estado,
-                    valorNuevo: `${nextState} (Motivo: ${reason})`,
-                  },
-                  ...u.auditLogs,
-                ],
-              }
-            : u
-        )
-      )
-    } else {
-      const targetVehicle = targetUser.vehiculos.find((vehicle) => vehicle.id === modalUserAction.vehicleId)
-      if (!targetVehicle) return
-      const updatedVehicleState: UserStatus = targetVehicle.estado === 'Activo' ? 'Inactivo' : 'Activo'
-      if (updatedVehicleState === 'Inactivo') {
-        const openEntry = findOpenEntryForPlate(targetVehicle.placa)
-        if (openEntry) {
-          setModalError(`No se puede inactivar el vehículo ${openEntry.placa} porque tiene una entrada abierta en la celda ${openEntry.celda}.`)
-          return
-        }
-      }
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === targetUser.id
-            ? {
-                ...u,
-                vehiculos: u.vehiculos.map((vehicle) =>
-                  vehicle.id === modalUserAction.vehicleId ? { ...vehicle, estado: updatedVehicleState } : vehicle
-                ),
-                auditLogs: [
-                  {
-                    id: Date.now(),
-                    fecha: nowIso,
-                    usuario: currentOperatorName,
-                    campo: `Estado de vehículo ${targetVehicle.placa}`,
-                    valorAnterior: targetVehicle.estado,
-                    valorNuevo: `${updatedVehicleState} (Motivo: ${reason})`,
-                  },
-                  ...u.auditLogs,
-                ],
-              }
-            : u
-        )
-      )
+      setModalUserAction(null)
+      setModalReason('')
+      setModalError('')
+    } catch (err) {
+      setModalError(errorMessage(err))
     }
-
-    setModalUserAction(null)
-    setModalReason('')
-    setModalError('')
   }
 
-  const handleCellStatusChange = () => {
+  const handleCellStatusChange = async () => {
     if (!selectedCell) return
     if (!isAdmin) {
       setCellActionError('Solo el administrador puede cambiar el estado operativo de una celda.')
@@ -889,66 +829,27 @@ function UsersModule({
       setCellActionError(`No se puede modificar la celda ${selectedCell.codigo} porque está ocupada actualmente por el vehículo de placa ${selectedCell.placa}.`)
       return
     }
-    if (selectedCell.estado === 'Libre') {
-      const currentAvailable = cells.filter((c) => c.tipo === selectedCell.tipo && c.estado !== 'Fuera de servicio').length
-      const requiredQuota = selectedCell.tipo === 'Carro' ? carActiveSubscriptions : motoActiveSubscriptions
-      if (currentAvailable - 1 < requiredQuota) {
-        setCellActionError(
-          `Cupo garantizado: no se puede poner la celda ${selectedCell.codigo} en Fuera de servicio porque quedarían ${currentAvailable - 1} celdas disponibles de ${selectedCell.tipo.toLowerCase()} para ${requiredQuota} mensualidades vigentes.`
-        )
-        return
-      }
+
+    const nextStatus = selectedCell.estado === 'Libre' ? 'Fuera de servicio' : 'Libre'
+    try {
+      const updatedCell = await updateModule2Cell(selectedCell.codigo, {
+        estado: nextStatus,
+        motivo: reason,
+      })
       setCells((prev) =>
-        prev.map((cell) =>
-          cell.codigo === selectedCell.codigo
-            ? {
-                ...cell,
-                estado: 'Fuera de servicio',
-                motivo: reason,
-                historial: [
-                  {
-                    id: Date.now(),
-                    momento: new Date().toISOString(),
-                    usuario: currentOperatorName,
-                    accion: 'Cambio de Libre → Fuera de servicio',
-                    motivo: reason,
-                  },
-                  ...cell.historial,
-                ],
-              }
-            : cell
-        )
+        syncCellsWithTickets(
+          prev.map((cell) => (cell.codigo === updatedCell.codigo ? updatedCell : cell)),
+          openTickets,
+        ),
       )
       setCellReason('')
       setCellActionError('')
-      return
+    } catch (err) {
+      setCellActionError(errorMessage(err))
     }
-    setCells((prev) =>
-      prev.map((cell) =>
-        cell.codigo === selectedCell.codigo
-          ? {
-              ...cell,
-              estado: 'Libre',
-              motivo: null,
-              historial: [
-                {
-                  id: Date.now(),
-                  momento: new Date().toISOString(),
-                  usuario: currentOperatorName,
-                  accion: 'Restablecimiento Fuera de servicio → Libre',
-                  motivo: reason,
-                },
-                ...cell.historial,
-              ],
-            }
-          : cell
-      )
-    )
-    setCellReason('')
-    setCellActionError('')
   }
 
-  const handleCellTypeChange = () => {
+  const handleCellTypeChange = async () => {
     if (!selectedCell) return
     if (!isAdmin) {
       setCellActionError('Solo el administrador puede cambiar el tipo de vehículo de una celda.')
@@ -967,39 +868,56 @@ function UsersModule({
       setCellActionError(`La celda ${selectedCell.codigo} ya está configurada para ${selectedCell.tipo}.`)
       return
     }
-    if (selectedCell.estado !== 'Fuera de servicio') {
-      const currentAvailable = cells.filter((c) => c.tipo === selectedCell.tipo && c.estado !== 'Fuera de servicio').length
-      const requiredQuota = selectedCell.tipo === 'Carro' ? carActiveSubscriptions : motoActiveSubscriptions
-      if (currentAvailable - 1 < requiredQuota) {
-        setCellActionError(
-          `Cupo garantizado: no se puede cambiar el tipo de ${selectedCell.codigo} porque quedarían ${currentAvailable - 1} celdas disponibles de ${selectedCell.tipo.toLowerCase()} para ${requiredQuota} mensualidades vigentes.`
-        )
-        return
-      }
-    }
-    const previousType = selectedCell.tipo
-    setCells((prev) =>
-      prev.map((cell) =>
-        cell.codigo === selectedCell.codigo
-          ? {
-              ...cell,
-              tipo: cellNewType,
-              historial: [
-                {
-                  id: Date.now(),
-                  momento: new Date().toISOString(),
-                  usuario: currentOperatorName,
-                  accion: `Cambio de tipo (${previousType} → ${cellNewType})`,
-                  motivo: reason,
-                },
-                ...cell.historial,
-              ],
-            }
-          : cell
+
+    try {
+      const updatedCell = await updateModule2Cell(selectedCell.codigo, {
+        tipo: cellNewType,
+        motivo: reason,
+      })
+      setCells((prev) =>
+        syncCellsWithTickets(
+          prev.map((cell) => (cell.codigo === updatedCell.codigo ? updatedCell : cell)),
+          openTickets,
+        ),
       )
-    )
-    setCellReason('')
-    setCellActionError('')
+      setCellReason('')
+      setCellActionError('')
+    } catch (err) {
+      setCellActionError(errorMessage(err))
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteModal) return
+    setDeleteModalError('')
+    try {
+      if (confirmDeleteModal.kind === 'user') {
+        const userId = Number(confirmDeleteModal.targetId)
+        await deleteModule2User(userId)
+        setUsers((prev) => prev.filter((u) => u.id !== userId))
+        setRegisterSuccess('Usuario eliminado correctamente del directorio.')
+        setTimeout(() => setRegisterSuccess(''), 2800)
+      } else if (confirmDeleteModal.kind === 'vehicle') {
+        const placa = String(confirmDeleteModal.targetId)
+        const updatedUser = await deleteModule2Vehicle(placa)
+        setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)))
+        setRegisterSuccess(`Vehículo ${placa} retirado del usuario satisfactoriamente.`)
+        setTimeout(() => setRegisterSuccess(''), 2800)
+      } else if (confirmDeleteModal.kind === 'cell') {
+        const codigo = String(confirmDeleteModal.targetId)
+        await deleteModule2Cell(codigo)
+        setCells((prev) => {
+          const remaining = prev.filter((c) => c.codigo !== codigo)
+          setSelectedCellCode(remaining[0]?.codigo ?? null)
+          return remaining
+        })
+        setCellReason('')
+        setCellActionError('')
+      }
+      setConfirmDeleteModal(null)
+    } catch (err) {
+      setDeleteModalError(errorMessage(err))
+    }
   }
 
   const renderDirectory = () => (
@@ -1040,94 +958,160 @@ function UsersModule({
               </tr>
             </thead>
             <tbody>
-              {filteredUsers.map((u) => (
-                <tr key={u.id}>
-                  <td><div className="doc-pill">{u.documentoTipo} {u.documento}</div></td>
-                  <td>
-                    <div className="user-meta">
-                      <div className="avatar avatar-light">{`${u.nombres.slice(0, 1)}${u.apellidos.slice(0, 1)}`.toUpperCase()}</div>
-                      <div>
-                        <strong>{`${u.nombres} ${u.apellidos}`}</strong>
-                        <small>Registrado {new Date(u.fechaRegistro).toLocaleDateString('es-CO')} · {u.operario}</small>
+              {filteredUsers.map((u) => {
+                const hasVehicleInside = u.vehiculos.some((v) => !!findOpenEntryForPlate(v.placa))
+                return (
+                  <tr key={u.id}>
+                    <td><div className="doc-pill">{u.documentoTipo} {u.documento}</div></td>
+                    <td>
+                      <div className="user-meta">
+                        <div className="avatar avatar-light">{`${u.nombres.slice(0, 1)}${u.apellidos.slice(0, 1)}`.toUpperCase()}</div>
+                        <div>
+                          <strong>{`${u.nombres} ${u.apellidos}`}</strong>
+                          <small>Registrado {new Date(u.fechaRegistro).toLocaleDateString('es-CO')} · {u.operario}</small>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="contact-stack">
-                      <span>{u.celular}</span>
-                      <span>{u.correo || 'Sin correo'}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="vehicle-list">
-                      {u.vehiculos.map((vehicle) => (
-                        <div key={vehicle.id} className="vehicle-badge-wrap">
-                          <span className="vehicle-badge"><strong>{vehicle.placa}</strong><small>{vehicle.tipo}</small></span>
-                          <span className="vehicle-meta">{vehicle.marca} · {vehicle.color}</span>
-                          <span className={`mini-badge ${vehicle.estado === 'Activo' ? 'success' : 'muted'}`}>{vehicle.estado}</span>
-                          {isAdmin && (
+                    </td>
+                    <td>
+                      <div className="contact-stack">
+                        <span>{u.celular}</span>
+                        <span>{u.correo || 'Sin correo'}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="vehicle-list">
+                        {u.vehiculos.map((vehicle) => {
+                          const openEntry = findOpenEntryForPlate(vehicle.placa)
+                          return (
+                            <div key={vehicle.id} className="vehicle-badge-wrap">
+                              <span className="vehicle-badge"><strong>{vehicle.placa}</strong><small>{vehicle.tipo}</small></span>
+                              <span className="vehicle-meta">{vehicle.marca} · {vehicle.color}</span>
+                              <span className={`mini-badge ${vehicle.estado === 'Activo' ? 'success' : 'muted'}`}>{vehicle.estado}</span>
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  className={`secondary-btn tiny ${vehicle.estado === 'Activo' ? 'danger' : ''}`}
+                                  onClick={() => {
+                                    setModalUserAction({ userId: u.id, kind: 'vehicle', vehicleId: vehicle.id })
+                                    setModalReason('')
+                                    setModalError('')
+                                  }}
+                                >
+                                  {vehicle.estado === 'Activo' ? 'Inactivar' : 'Reactivar'}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="vehicle-delete-btn"
+                                disabled={!!openEntry}
+                                title={openEntry ? `El vehículo ${vehicle.placa} está actualmente en la celda ${openEntry.celda}` : `Retirar vehículo ${vehicle.placa} de ${u.nombres} ${u.apellidos}`}
+                                onClick={() => {
+                                  setDeleteModalError('')
+                                  setConfirmDeleteModal({
+                                    kind: 'vehicle',
+                                    targetId: vehicle.placa,
+                                    title: `Eliminar / retirar vehículo ${vehicle.placa}`,
+                                    description: `¿Confirmas que deseas retirar el vehículo ${vehicle.placa} (${vehicle.tipo} · ${vehicle.marca} ${vehicle.color}) del usuario ${u.nombres} ${u.apellidos}? El propietario conservará su cuenta y el retiro quedará registrado en su historial.`,
+                                  })
+                                }}
+                              >
+                                Eliminar
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </td>
+                    <td><span className={`status-pill ${u.estado === 'Activo' ? 'success' : 'muted'}`}>{u.estado}</span></td>
+                    <td>
+                      <div className="actions-dropdown-wrap" onMouseDown={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className={`actions-dropdown-trigger ${openActionsUserId === u.id ? 'open' : ''}`}
+                          onClick={() => setOpenActionsUserId((prev) => (prev === u.id ? null : u.id))}
+                        >
+                          Acciones ▾
+                        </button>
+                        {openActionsUserId === u.id && (
+                          <div className="actions-dropdown-menu">
                             <button
-                              className={`secondary-btn tiny ${vehicle.estado === 'Activo' ? 'danger' : ''}`}
+                              type="button"
+                              className="actions-dropdown-item"
                               onClick={() => {
-                                setModalUserAction({ userId: u.id, kind: 'vehicle', vehicleId: vehicle.id })
-                                setModalReason('')
-                                setModalError('')
+                                const firstVeh = u.vehiculos[0]
+                                setEditingUser(u)
+                                setEditingVehicleId(firstVeh?.id ?? null)
+                                setEditForm({ celular: u.celular, correo: u.correo, marca: firstVeh?.marca ?? '', color: firstVeh?.color ?? '' })
+                                setEditError('')
+                                setOpenActionsUserId(null)
                               }}
                             >
-                              {vehicle.estado === 'Activo' ? 'Inactivar' : 'Reactivar'}
+                              ✏️ Editar datos
                             </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </td>
-                  <td><span className={`status-pill ${u.estado === 'Activo' ? 'success' : 'muted'}`}>{u.estado}</span></td>
-                  <td>
-                    <div className="action-stack">
-                      <button
-                        className="secondary-btn tiny"
-                        onClick={() => {
-                          const firstVeh = u.vehiculos[0]
-                          setEditingUser(u)
-                          setEditingVehicleId(firstVeh?.id ?? null)
-                          setEditForm({ celular: u.celular, correo: u.correo, marca: firstVeh?.marca ?? '', color: firstVeh?.color ?? '' })
-                          setEditError('')
-                        }}
-                      >
-                        Editar datos
-                      </button>
-                      <button
-                        className="secondary-btn tiny"
-                        onClick={() => {
-                          setVehicleModalUser(u)
-                          setVehicleModalForm({ placa: '', tipo: 'Carro', marca: '', color: '' })
-                          setModalError('')
-                        }}
-                      >
-                        + Agregar vehículo
-                      </button>
-                      <button
-                        className="secondary-btn tiny"
-                        onClick={() => setAuditModalUser(u)}
-                      >
-                        Historial ({u.auditLogs.length})
-                      </button>
-                      {isAdmin && (
-                        <button
-                          className={`secondary-btn tiny ${u.estado === 'Activo' ? 'danger' : ''}`}
-                          onClick={() => {
-                            setModalUserAction({ userId: u.id, kind: 'user' })
-                            setModalReason('')
-                            setModalError('')
-                          }}
-                        >
-                          {u.estado === 'Activo' ? 'Inactivar' : 'Reactivar'}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                            <button
+                              type="button"
+                              className="actions-dropdown-item"
+                              onClick={() => {
+                                setVehicleModalUser(u)
+                                setVehicleModalForm({ placa: '', tipo: 'Carro', marca: '', color: '' })
+                                setModalError('')
+                                setOpenActionsUserId(null)
+                              }}
+                            >
+                              ➕ Agregar vehículo
+                            </button>
+                            <button
+                              type="button"
+                              className="actions-dropdown-item"
+                              onClick={() => {
+                                setAuditModalUser(u)
+                                setOpenActionsUserId(null)
+                              }}
+                            >
+                              📋 Ver historial ({u.auditLogs.length})
+                            </button>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                className={`actions-dropdown-item ${u.estado === 'Activo' ? 'danger' : ''}`}
+                                onClick={() => {
+                                  setModalUserAction({ userId: u.id, kind: 'user' })
+                                  setModalReason('')
+                                  setModalError('')
+                                  setOpenActionsUserId(null)
+                                }}
+                              >
+                                {u.estado === 'Activo' ? '🚫 Inactivar usuario' : '✅ Reactivar usuario'}
+                              </button>
+                            )}
+                            {!hasVehicleInside && (
+                              <>
+                                <div className="actions-dropdown-divider" />
+                                <button
+                                  type="button"
+                                  className="actions-dropdown-item danger"
+                                  onClick={() => {
+                                    setOpenActionsUserId(null)
+                                    setDeleteModalError('')
+                                    setConfirmDeleteModal({
+                                      kind: 'user',
+                                      targetId: u.id,
+                                      title: `Eliminar usuario ${u.nombres} ${u.apellidos}`,
+                                      description: `¿Confirmas que deseas eliminar el usuario ${u.nombres} ${u.apellidos} (${u.documentoTipo} ${u.documento}) junto con sus vehículos asociados? Esta acción solo está permitida porque ninguno de sus vehículos se encuentra dentro del parqueadero.`,
+                                    })
+                                  }}
+                                >
+                                  🗑️ Eliminar usuario
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -1174,7 +1158,7 @@ function UsersModule({
       return (
         <div className="module-panel">
           <div className="module-panel-head">
-            <h2>Mapa de celdas (80)</h2>
+            <h2>Mapa de celdas ({cells.length})</h2>
             {isAdmin && <button className="primary-btn" onClick={initializeCells}>Configuración inicial (70 Carros / 10 Motos)</button>}
           </div>
           <div className="module-empty">
@@ -1197,6 +1181,10 @@ function UsersModule({
     const motoTotal = cells.filter((cell) => cell.tipo === 'Moto').length
     const carAvailable = cells.filter((cell) => cell.tipo === 'Carro' && cell.estado !== 'Fuera de servicio').length
     const motoAvailable = cells.filter((cell) => cell.tipo === 'Moto' && cell.estado !== 'Fuera de servicio').length
+    const firstCarCode = carCells[0]?.codigo ?? 'C-01'
+    const lastCarCode = carCells[carCells.length - 1]?.codigo ?? 'C-70'
+    const firstMotoCode = motoCells[0]?.codigo ?? 'M-01'
+    const lastMotoCode = motoCells[motoCells.length - 1]?.codigo ?? 'M-10'
 
     const statusClassFor = (estado: CellStatus) =>
       estado === 'Libre' ? 'free libre' : estado === 'Ocupada' ? 'occupied ocupada' : 'disabled fueradeservicio'
@@ -1254,7 +1242,7 @@ function UsersModule({
         <div className="cell-layout">
           {carCells.length > 0 && (
             <div className="cell-group">
-              <h3>CARROS / C-01 — C-70 ({carCells.length})</h3>
+              <h3>CARROS / {firstCarCode} — {lastCarCode} ({carCells.length})</h3>
               <div className="cell-grid">
                 {carCells.map((cell) => (
                   <button
@@ -1284,7 +1272,7 @@ function UsersModule({
 
           {motoCells.length > 0 && (
             <div className="cell-group">
-              <h3>MOTOS / M-01 — M-10 ({motoCells.length})</h3>
+              <h3>MOTOS / {firstMotoCode} — {lastMotoCode} ({motoCells.length})</h3>
               <div className="cell-grid small-grid">
                 {motoCells.map((cell) => (
                   <button
@@ -1332,7 +1320,7 @@ function UsersModule({
                 <span>La celda {selectedCell.codigo} está ocupada por {selectedCell.placa} y no puede pasar a Fuera de servicio ni cambiar de tipo hasta que se registre la salida en Operaciones.</span>
               </div>
             ) : !isAdmin ? (
-              <div className="permission-note">Solo el perfil de Administrador puede inhabilitar celdas, restablecerlas a Libre o cambiar su tipo.</div>
+              <div className="permission-note">Solo el perfil de Administrador puede inhabilitar celdas, restablecerlas a Libre, cambiar su tipo o eliminarlas.</div>
             ) : (
               <>
                 <div className="cell-detail-grid">
@@ -1354,6 +1342,21 @@ function UsersModule({
                   </button>
                   <button className="secondary-btn" onClick={handleCellTypeChange}>
                     Guardar cambio de tipo ({selectedCell.tipo} → {cellNewType})
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-btn danger"
+                    onClick={() => {
+                      setDeleteModalError('')
+                      setConfirmDeleteModal({
+                        kind: 'cell',
+                        targetId: selectedCell.codigo,
+                        title: `Eliminar celda ${selectedCell.codigo}`,
+                        description: `¿Confirmas que deseas eliminar la celda ${selectedCell.codigo} (${selectedCell.tipo}) del inventario del parqueadero? Se validará automáticamente el cupo mínimo garantizado para las mensualidades vigentes.`,
+                      })
+                    }}
+                  >
+                    🗑️ Eliminar celda
                   </button>
                 </div>
               </>
@@ -1412,7 +1415,7 @@ function UsersModule({
     <section className="module-shell module-users">
       <div className="module-subnav" role="tablist" aria-label="Sub-vistas del módulo 2">
         <button type="button" className={subView === 'directory' ? 'active' : ''} onClick={() => setSubView('directory')}>👥 Directorio de Usuarios {userCount > 0 && <span>{userCount}</span>}</button>
-        <button type="button" className={subView === 'map' ? 'active' : ''} onClick={() => setSubView('map')}>🗺️ Mapa de Celdas (80)</button>
+        <button type="button" className={subView === 'map' ? 'active' : ''} onClick={() => setSubView('map')}>🗺️ Mapa de Celdas ({cells.length})</button>
         <button type="button" className={subView === 'register' ? 'active' : ''} onClick={() => setSubView('register')}>➕ Registrar Usuario y Vehículo</button>
       </div>
 
@@ -1613,44 +1616,47 @@ function UsersModule({
       )}
 
       {/* Modal d) Historial de auditoría (auditLogs) del usuario y sus vehículos */}
-      {auditModalUser && (
-        <div className="modal-backdrop" onMouseDown={() => setAuditModalUser(null)}>
-          <div className="modal-card wide" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <div>
-                <h2>Historial de trazabilidad · {auditModalUser.nombres} {auditModalUser.apellidos}</h2>
-                <p>{auditModalUser.documentoTipo} {auditModalUser.documento} · Registro inalterable de creaciones, ediciones y cambios de estado.</p>
+      {auditModalUser && (() => {
+        const activeAuditUser = users.find((u) => u.id === auditModalUser.id) ?? auditModalUser
+        return (
+          <div className="modal-backdrop" onMouseDown={() => setAuditModalUser(null)}>
+            <div className="modal-card wide" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="modal-head">
+                <div>
+                  <h2>Historial de trazabilidad · {activeAuditUser.nombres} {activeAuditUser.apellidos}</h2>
+                  <p>{activeAuditUser.documentoTipo} {activeAuditUser.documento} · Registro inalterable de creaciones, ediciones y cambios de estado.</p>
+                </div>
+                <button className="icon-btn" onClick={() => setAuditModalUser(null)} aria-label="Cerrar"><Icon name="x" /></button>
               </div>
-              <button className="icon-btn" onClick={() => setAuditModalUser(null)} aria-label="Cerrar"><Icon name="x" /></button>
-            </div>
-            <div className="modal-body">
-              <div className="history-scroll">
-                {auditModalUser.auditLogs.map((log) => (
-                  <div key={log.id} className="history-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-                      <strong>{log.campo}</strong>
-                      <small>{new Date(log.fecha).toLocaleString('es-CO')} · Responsable: {log.usuario}</small>
-                    </div>
-                    <div className="audit-diff">
-                      <div>
-                        <span>Valor anterior</span>
-                        <strong>{log.valorAnterior}</strong>
+              <div className="modal-body">
+                <div className="history-scroll">
+                  {activeAuditUser.auditLogs.map((log) => (
+                    <div key={log.id} className="history-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                        <strong>{log.campo}</strong>
+                        <small>{new Date(log.fecha).toLocaleString('es-CO')} · Responsable: {log.usuario}</small>
                       </div>
-                      <div>
-                        <span>Valor nuevo / Motivo</span>
-                        <strong>{log.valorNuevo}</strong>
+                      <div className="audit-diff">
+                        <div>
+                          <span>Valor anterior</span>
+                          <strong>{log.valorAnterior}</strong>
+                        </div>
+                        <div>
+                          <span>Valor nuevo / Motivo</span>
+                          <strong>{log.valorNuevo}</strong>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="modal-actions">
-              <button className="primary-btn" onClick={() => setAuditModalUser(null)}>Cerrar historial</button>
+              <div className="modal-actions">
+                <button className="primary-btn" onClick={() => setAuditModalUser(null)}>Cerrar historial</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Modal e) + Crear celda */}
       {newCellOpen && (
@@ -1681,35 +1687,61 @@ function UsersModule({
               <button className="secondary-btn" onClick={() => setNewCellOpen(false)}>Cancelar</button>
               <button
                 className="primary-btn"
-                onClick={() => {
+                onClick={async () => {
                   const trimmedCode = newCellForm.codigo.trim().toUpperCase()
                   if (!trimmedCode) {
                     setNewCellError('Debes ingresar un código para la celda (ej. C-71).')
                     return
                   }
-                  const exists = cells.some((cell) => cell.codigo.toUpperCase() === trimmedCode)
-                  if (exists) {
-                    setNewCellError(`El código de celda ${trimmedCode} ya existe en el mapa.`)
-                    return
+                  try {
+                    const createdCell = await createModule2Cell({
+                      codigo: trimmedCode,
+                      tipo: newCellForm.tipo,
+                    })
+                    setCells((prev) => [...prev, createdCell])
+                    setSelectedCellCode(createdCell.codigo)
+                    setNewCellOpen(false)
+                    setNewCellForm({ codigo: '', tipo: 'Carro' })
+                    setNewCellError('')
+                  } catch (err) {
+                    setNewCellError(errorMessage(err))
                   }
-                  const next: CellRecord = {
-                    id: Date.now(),
-                    codigo: trimmedCode,
-                    tipo: newCellForm.tipo,
-                    estado: 'Libre',
-                    placa: null,
-                    hora: null,
-                    motivo: null,
-                    historial: [{ id: Date.now() + 1, momento: new Date().toISOString(), usuario: currentOperatorName, accion: 'Creación de celda', motivo: `Celda ${trimmedCode} (${newCellForm.tipo}) creada por administración.` }],
-                  }
-                  setCells((prev) => [...prev, next])
-                  setSelectedCellCode(next.codigo)
-                  setNewCellOpen(false)
-                  setNewCellForm({ codigo: '', tipo: 'Carro' })
-                  setNewCellError('')
                 }}
               >
                 Guardar celda
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal f) Confirmación de eliminación (Usuario / Vehículo / Celda) */}
+      {confirmDeleteModal && (
+        <div className="modal-backdrop" onMouseDown={() => { setConfirmDeleteModal(null); setDeleteModalError('') }}>
+          <div className="modal-card" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <h2>{confirmDeleteModal.title}</h2>
+                <p>Confirma esta acción para aplicarla en la base de datos.</p>
+              </div>
+              <button className="icon-btn" onClick={() => { setConfirmDeleteModal(null); setDeleteModalError('') }} aria-label="Cerrar"><Icon name="x" /></button>
+            </div>
+            <div className="modal-body">
+              <div className="notice notice-amber">
+                <Icon name="alert" size={18} />
+                <span>{confirmDeleteModal.description}</span>
+              </div>
+              {deleteModalError && (
+                <div className="notice notice-red">
+                  <Icon name="alert" size={16} />
+                  <span>{deleteModalError}</span>
+                </div>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button className="secondary-btn" onClick={() => { setConfirmDeleteModal(null); setDeleteModalError('') }}>Cancelar</button>
+              <button className="secondary-btn danger" onClick={handleConfirmDelete}>
+                Confirmar eliminación
               </button>
             </div>
           </div>
