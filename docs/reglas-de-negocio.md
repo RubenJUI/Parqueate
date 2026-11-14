@@ -54,6 +54,36 @@ El requerimiento indica qué debe existir antes de usar el módulo, pero no cóm
 6. Cada estado se identifica con color y con texto. Las celdas convertidas se distinguen con un recuadro de otro color, sin confundirse con fuera de servicio.
 7. El mapa carga en menos de 2 segundos.
 
+## HU-C03 · Poner una celda fuera de servicio
+
+**Como:** Administrador del parqueadero. **Requiero:** marcar una celda como fuera de servicio cuando esté dañada o en mantenimiento, indicando el motivo. **Para:** que el sistema solo asigne celdas que realmente se pueden usar.
+
+**Criterios de aceptación**
+
+1. Solo se puede poner fuera de servicio una celda Libre. Si está Ocupada, el sistema rechaza el cambio e informa la placa del vehículo.
+2. Se exige el motivo.
+3. Cupo garantizado: después del cambio, las celdas utilizables de ese tipo deben alcanzar para todos los vehículos activos de ese tipo. Si no alcanzan, el sistema rechaza el cambio.
+   - Celda utilizable: la que está libre u ocupada. Las que están fuera de servicio no cuentan.
+   - Vehículo activo: el vehículo y su dueño están activos, aunque la mensualidad esté vencida.
+   - Ejemplo: con 10 celdas de moto y 9 motos activas, se puede poner 1 celda fuera de servicio. La segunda se rechaza.
+4. Al quedar fuera de servicio:
+   - La celda deja de ofrecerse al registrar una entrada, tanto en la asignación automática como en la lista para escogerla.
+   - El resumen de celdas se actualiza de inmediato.
+   - El historial de la celda registra quién hizo el cambio, cuándo y el motivo.
+
+## HU-C05 · Convertir una celda de carro en 2 de moto
+
+**Como:** Administrador del parqueadero. **Requiero:** convertir una celda de carro libre en 2 celdas de moto, indicando el motivo. **Para:** ajustar el espacio cuando hay más demanda de motos.
+
+**Criterios de aceptación**
+
+1. La celda de carro debe estar Libre. Si está Ocupada, se rechaza e informa la placa. Si está fuera de servicio, se pide habilitarla primero.
+2. Se exige el motivo.
+3. Se valida el cupo garantizado, con la misma regla de la HU-C03: después del cambio, las celdas de carro utilizables deben alcanzar para todos los carros activos. Si no alcanzan, se rechaza con un mensaje como "No se puede convertir la celda C-30 a moto: quedarían 68 celdas de carro utilizables para 69 vehículos activos."
+4. Las 2 celdas nuevas toman los siguientes códigos consecutivos de moto. Ejemplo: si el mayor es M-10, C-20 pasa a M-11 y M-12. Los códigos no se reutilizan, aunque la conversión se restablezca.
+5. Las celdas nuevas se asignan de forma independiente. El cambio se ve de inmediato en el mapa, en el resumen y en las celdas disponibles para registrar entradas.
+6. El historial registra la conversión con responsable, fecha y motivo. Ejemplo: "M-11 y M-12, antes C-20".
+
 ## HU-U08 · Eliminar usuario o vehículo registrado por error
 
 **Como:** Administrador del parqueadero. **Requiero:** eliminar un usuario o vehículo que no tiene ningún movimiento. **Para:** corregir registros hechos por error.
