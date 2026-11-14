@@ -81,7 +81,7 @@ def test_hu_c05_valida_el_cupo_garantizado(client, admin, registrar, db):
     assert response.status_code == 400
     assert response.json()["detail"] == (
         "No se puede convertir la celda C-30 a moto: quedarían 0 celdas de carro utilizables "
-        "para 1 cliente con mensualidad vigente."
+        "para 1 vehículo activo."
     )
 
 

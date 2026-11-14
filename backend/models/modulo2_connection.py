@@ -1437,7 +1437,8 @@ class Modulo2CeldaConnection:
             )
 
     def _validar_cupo_conversion(self, cur, tipo: str, celdas_que_salen: int, accion: str) -> None:
-        """Cupo garantizado: las celdas utilizables del tipo que pierde espacio deben alcanzar para sus clientes."""
+        """Cupo garantizado: las celdas utilizables (libres u ocupadas) del tipo que pierde espacio deben
+        alcanzar para sus vehículos activos (vehículo y dueño activos, aunque la mensualidad esté vencida)."""
         cur.execute(
             "SELECT COUNT(*) AS utilizables FROM espacio WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')",
             (tipo,),
@@ -1450,7 +1451,7 @@ class Modulo2CeldaConnection:
                 detail=(
                     f"{accion}: quedarían {quedarian} {'celda' if quedarian == 1 else 'celdas'} de {tipo.lower()} "
                     f"{'utilizable' if quedarian == 1 else 'utilizables'} para {requerido} "
-                    f"{'cliente' if requerido == 1 else 'clientes'} con mensualidad vigente."
+                    f"{'vehículo activo' if requerido == 1 else 'vehículos activos'}."
                 ),
             )
 
