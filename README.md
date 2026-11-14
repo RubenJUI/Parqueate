@@ -61,7 +61,7 @@ Requiere Node.js 22, pnpm 10.34.3 (declarados en `.mise.toml` y `frontend/packag
 ### Verificación
 
 ```sh
-cd backend && python -m pytest                       # 46 pruebas: casos de uso, reglas, permisos y eliminación
+cd backend && python -m pytest                       # 49 pruebas: casos de uso, reglas, permisos y eliminación
 cd frontend && corepack pnpm typecheck && corepack pnpm build
 ```
 

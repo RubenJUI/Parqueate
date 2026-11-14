@@ -12,7 +12,9 @@ class VehiculoConnection:
             cur.execute(
                 """
                 SELECT v.placa, v.tipo_vehiculo, v.id_propietario,
-                       p.nombre AS propietario, p.documento, p.telefono
+                       p.nombre AS propietario, p.documento, p.telefono,
+                       v.estado AS estado_vehiculo, v.motivo_inactivacion AS motivo_inactivacion_vehiculo,
+                       p.estado AS estado_usuario, p.motivo_inactivacion AS motivo_inactivacion_usuario
                 FROM vehiculo v
                 JOIN propietario p ON p.id_propietario = v.id_propietario
                 WHERE v.placa = %s

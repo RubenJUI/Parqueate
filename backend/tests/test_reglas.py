@@ -140,3 +140,44 @@ def test_pago_futuro_no_da_vigencia(client, operario, registrar, db):
 
     assert response.status_code == 409
     assert response.json()["detail"] == "El vehículo no tiene una mensualidad registrada"
+
+
+# HU-U07 / HU-U09: un usuario o vehículo inactivo no puede registrar entrada; al reactivarse, sí.
+def test_hu_u07_vehiculo_inactivo_no_registra_entrada(client, operario, admin, registrar, ocupacion):
+    registrar("ABC123")
+    inactivar = client.patch("/api/vehiculos/ABC123/estado", json={"estado": "Inactivo", "motivo": "Reporte de robo"}, headers=admin)
+    assert inactivar.status_code == 200, inactivar.text
+
+    response = client.post("/api/tiquetes/entrada", json={"placa": "ABC123"}, headers=operario)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "El vehículo ABC123 está inactivo (motivo: Reporte de robo). No puede registrar entrada; avise al administrador"
+    )
+    assert ocupacion("Carro") == "0/70"
+    consulta = client.get("/api/vehiculos/ABC123", headers=operario).json()
+    assert consulta["estado_vehiculo"] == "Inactivo"
+    assert consulta["motivo_inactivacion_vehiculo"] == "Reporte de robo"
+
+
+def test_hu_u07_usuario_inactivo_no_registra_entrada(client, operario, admin, registrar):
+    registrar("ABC123")
+    inactivar = client.patch("/api/usuarios/1/estado", json={"estado": "Inactivo", "motivo": "Solicitud del titular"}, headers=admin)
+    assert inactivar.status_code == 200, inactivar.text
+
+    response = client.post("/api/tiquetes/entrada", json={"placa": "ABC123"}, headers=operario)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "El usuario Dueño ABC123 está inactivo (motivo: Solicitud del titular). "
+        "No puede registrar entrada; avise al administrador"
+    )
+    assert client.get("/api/vehiculos/ABC123", headers=operario).json()["estado_usuario"] == "Inactivo"
+
+
+def test_hu_u09_al_reactivar_puede_registrar_entrada(client, operario, admin, registrar):
+    registrar("ABC123")
+    client.patch("/api/vehiculos/ABC123/estado", json={"estado": "Inactivo", "motivo": "Reporte de robo"}, headers=admin)
+    client.patch("/api/vehiculos/ABC123/estado", json={"estado": "Activo", "motivo": "Vehículo recuperado"}, headers=admin)
+
+    assert client.post("/api/tiquetes/entrada", json={"placa": "ABC123"}, headers=operario).status_code == 201

@@ -33,7 +33,7 @@ El MVP 1 corresponde a la **Iteración 1: Gestión de la entrada y salida de veh
 
 ## Pruebas
 
-`backend/tests/` tiene 46 pruebas automáticas que se ejecutan contra una base de pruebas aparte (ver [backend/README.md](../backend/README.md#pruebas)):
+`backend/tests/` tiene 49 pruebas automáticas que se ejecutan contra una base de pruebas aparte (ver [backend/README.md](../backend/README.md#pruebas)):
 
 - los 7 casos de uso del documento de requerimientos;
 - los ejemplos de vigencia del documento, incluido el caso de febrero;

@@ -21,7 +21,7 @@ Navegador (React + Vite)  ──HTTP/JSON + JWT──▶  API (FastAPI, Python) 
 | `database/` | Conexión a PostgreSQL y scripts SQL | `database.py`, `schema.sql`, `seed.sql`, `datos_prueba.sql`, `registrar_vehiculo.sql` |
 | `models/` | Acceso a datos con SQL, una clase por tabla | `TiqueteConnection`, `EspacioConnection`, `VehiculoConnection`, `PagoConnection`, `TarifaConnection`, `UsuarioConnection` |
 | `schema/` | Esquemas Pydantic de entrada y salida de la API | `tiquete_schema`, `espacio_schema`, `vehiculo_schema`, `tarifa_schema`, `usuario_schema`, `auth_schema`, `tipos` |
-| `tests/` | Pruebas automáticas con pytest | 46 pruebas |
+| `tests/` | Pruebas automáticas con pytest | 49 pruebas |
 | Herramientas | Precondiciones y operación | `create_admin.py`, `registrar_vehiculo.py`, `respaldo.sh`, `instalar_respaldo.sh` |
 
 Dependencias entre paquetes: `main` usa `auth`, `models`, `schema` y `database`; `models` y `auth` usan `database` y `config`; `schema` no depende de ningún otro.

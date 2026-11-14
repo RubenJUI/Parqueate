@@ -24,6 +24,11 @@ class VehiculoConsultaOut(BaseModel):
     propietario: str
     documento: str
     telefono: Optional[str] = None
+    # HU-U07: un usuario o vehículo inactivo no puede registrar entrada.
+    estado_vehiculo: str = "Activo"
+    motivo_inactivacion_vehiculo: Optional[str] = None
+    estado_usuario: str = "Activo"
+    motivo_inactivacion_usuario: Optional[str] = None
     mensualidad: Optional[MensualidadOut] = None
     id_tiquete_abierto: Optional[int] = None
     numero_espacio: Optional[str] = None

@@ -244,6 +244,18 @@ def get_tiquete(id_tiquete: int, conn=Depends(get_db)):
     return TiqueteOut.from_row(row)
 
 
+def motivo_bloqueo_por_inactividad(vehiculo: dict) -> Optional[str]:
+    """HU-U07: mensaje de rechazo si el usuario o el vehículo están inactivos; None si puede entrar."""
+    if vehiculo.get("estado_usuario") == "Inactivo":
+        sujeto, motivo = f"El usuario {vehiculo['propietario']}", vehiculo.get("motivo_inactivacion_usuario")
+    elif vehiculo.get("estado_vehiculo") == "Inactivo":
+        sujeto, motivo = f"El vehículo {vehiculo['placa']}", vehiculo.get("motivo_inactivacion_vehiculo")
+    else:
+        return None
+    detalle_motivo = f" (motivo: {motivo})" if motivo else ""
+    return f"{sujeto} está inactivo{detalle_motivo}. No puede registrar entrada; avise al administrador"
+
+
 @app.post("/api/tiquetes/entrada", response_model=EntradaOut, status_code=HTTP_201_CREATED, tags=["Tiquetes"])
 def registrar_entrada(
     entrada: EntradaSchema,
@@ -254,6 +266,9 @@ def registrar_entrada(
     vehiculo = VehiculoConnection(conn).get_by_placa(entrada.placa)
     if not vehiculo:
         raise HTTPException(status_code=404, detail="El vehículo no está asociado a ningún usuario registrado")
+    motivo_inactivo = motivo_bloqueo_por_inactividad(vehiculo)
+    if motivo_inactivo:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=motivo_inactivo)
 
     repo = TiqueteConnection(conn)
     abierto = repo.get_abierto_por_placa(entrada.placa)

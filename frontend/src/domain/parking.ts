@@ -29,6 +29,11 @@ export type VehicleLookup = {
   propietario: string
   documento: string
   telefono: string | null
+  // HU-U07: un usuario o vehículo inactivo no puede registrar entrada.
+  estado_vehiculo: 'Activo' | 'Inactivo'
+  motivo_inactivacion_vehiculo: string | null
+  estado_usuario: 'Activo' | 'Inactivo'
+  motivo_inactivacion_usuario: string | null
   mensualidad: Monthly | null
   id_tiquete_abierto: number | null
   numero_espacio: string | null
