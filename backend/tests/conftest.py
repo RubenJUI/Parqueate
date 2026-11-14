@@ -27,7 +27,7 @@ from database.database import DATABASE_URL  # noqa: E402
 from main import app  # noqa: E402
 
 DATABASE_DIR = Path(__file__).resolve().parent.parent / "database"
-TABLAS = ["tiquete", "pago", "tarifa", "usuario", "espacio", "vehiculo", "propietario"]
+TABLAS = ["tiquete", "pago", "tarifa", "usuario", "espacio", "conversion_celda", "vehiculo", "propietario"]
 
 
 @pytest.fixture(scope="session")
@@ -51,7 +51,13 @@ def limpiar(db):
     with db.cursor() as cur:
         cur.execute("TRUNCATE tiquete, pago, vehiculo, propietario, usuario RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE registro_eliminacion RESTART IDENTITY")
-        cur.execute("UPDATE espacio SET estado = 'Disponible'")
+        # Deshace conversiones y celdas creadas: vuelven las 80 celdas originales, libres y sin historial.
+        cur.execute("TRUNCATE conversion_celda, historial_celda RESTART IDENTITY")
+        cur.execute("DELETE FROM espacio WHERE numero_espacio !~ '^(C-(0[1-9]|[1-6][0-9]|70)|M-(0[1-9]|10))$'")
+        cur.execute(
+            "UPDATE espacio SET estado = 'Disponible', id_conversion = NULL, motivo_mantenimiento = NULL, "
+            "tipo_permitido = CASE WHEN numero_espacio LIKE 'C-%' THEN 'Carro' ELSE 'Moto' END"
+        )
 
 
 @pytest.fixture

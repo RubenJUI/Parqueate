@@ -29,6 +29,7 @@ from schema.espacio_schema import EspacioOut, OcupacionOut
 from schema.modulo2_schema import (
     CambioEstadoSchema,
     CeldaActualizarSchema,
+    CeldaMotivoSchema,
     CeldaCrearSchema,
     CeldaModulo2Out,
     EliminacionSchema,
@@ -581,6 +582,40 @@ def actualizar_celda_modulo2(
     return Modulo2CeldaConnection(conn).actualizar_celda(
         codigo, datos, usuario_responsable=current_user.nombre
     )
+
+
+@app.post(
+    "/api/celdas/{codigo}/convertir",
+    response_model=List[CeldaModulo2Out],
+    status_code=HTTP_200_OK,
+    tags=["Celdas"],
+)
+def convertir_celda_modulo2(
+    codigo: str,
+    datos: CeldaMotivoSchema,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
+    conn=Depends(get_db),
+):
+    """HU-C05/HU-C06 (solo Administrador): convierte una celda de carro libre en 2 de moto, o la pareja fija
+    de una moto original en 1 celda de carro. Devuelve el mapa completo actualizado."""
+    return Modulo2CeldaConnection(conn).convertir_celda(codigo, datos.motivo, usuario_responsable=current_user.nombre)
+
+
+@app.post(
+    "/api/celdas/{codigo}/restablecer",
+    response_model=List[CeldaModulo2Out],
+    status_code=HTTP_200_OK,
+    tags=["Celdas"],
+)
+def restablecer_celda_modulo2(
+    codigo: str,
+    datos: CeldaMotivoSchema,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
+    conn=Depends(get_db),
+):
+    """HU-C07 (solo Administrador): deshace la conversión a la que pertenece la celda y devuelve el espacio
+    a sus códigos originales. Devuelve el mapa completo actualizado."""
+    return Modulo2CeldaConnection(conn).restablecer_celda(codigo, datos.motivo, usuario_responsable=current_user.nombre)
 
 
 @app.delete(

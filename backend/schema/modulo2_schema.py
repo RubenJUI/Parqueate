@@ -125,6 +125,13 @@ class CeldaModulo2Out(BaseModel):
     hora: Optional[str] = None
     motivo: Optional[str] = None
     historial: List[HistorialCeldaOut]
+    # HU-C01/HU-C05/HU-C06: si la celda resulta de una conversión, el espacio donde está
+    # (p. ej. "C-20" o "M-05 y M-06") y el tipo que tenía ese espacio.
+    id_conversion: Optional[int] = None
+    espacio_original: Optional[str] = None
+    tipo_original: Optional[TipoVehiculo] = None
+    # HU-C06: pareja fija de una moto original (M-05 -> "M-06"); None si no puede convertirse a carro.
+    pareja: Optional[str] = None
 
 
 class CeldaCrearSchema(BaseModel):
@@ -132,6 +139,12 @@ class CeldaCrearSchema(BaseModel):
 
     codigo: str
     tipo: TipoVehiculo
+
+
+class CeldaMotivoSchema(BaseModel):
+    """Motivo obligatorio para convertir una celda o restablecer una conversión."""
+
+    motivo: str
 
 
 class CeldaActualizarSchema(BaseModel):

@@ -58,8 +58,27 @@ CREATE TABLE espacio (
     id_espacio SERIAL PRIMARY KEY,
     numero_espacio VARCHAR(10) UNIQUE NOT NULL,
     tipo_permitido VARCHAR(20) NOT NULL CHECK (tipo_permitido IN ('Carro', 'Moto')),
-    estado VARCHAR(20) NOT NULL DEFAULT 'Disponible' CHECK (estado IN ('Disponible', 'Ocupado', 'Mantenimiento')),
-    motivo_mantenimiento VARCHAR(255)
+    -- HU-C05/HU-C06: 'Convertida' = espacio original cedido a una conversión;
+    -- 'Retirada' = celda resultante de una conversión ya restablecida (su código no se reutiliza).
+    estado VARCHAR(20) NOT NULL DEFAULT 'Disponible' CHECK (estado IN ('Disponible', 'Ocupado', 'Mantenimiento', 'Convertida', 'Retirada')),
+    motivo_mantenimiento VARCHAR(255),
+    -- Celdas resultantes de una conversión: a qué conversión pertenecen.
+    id_conversion INT
+);
+
+-- HU-C05/HU-C06/HU-C07: conversiones de celdas (carro -> 2 motos, pareja de motos -> carro) y su restablecimiento.
+CREATE TABLE IF NOT EXISTS conversion_celda (
+    id SERIAL PRIMARY KEY,
+    tipo_origen VARCHAR(20) NOT NULL CHECK (tipo_origen IN ('Carro', 'Moto')),
+    codigos_origen TEXT[] NOT NULL,
+    codigos_resultado TEXT[] NOT NULL,
+    motivo VARCHAR(255) NOT NULL,
+    usuario_responsable VARCHAR(100) NOT NULL,
+    fecha_conversion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    activa BOOLEAN NOT NULL DEFAULT TRUE,
+    motivo_restablecimiento VARCHAR(255),
+    usuario_restablecimiento VARCHAR(100),
+    fecha_restablecimiento TIMESTAMP
 );
 
 -- Tabla Usuario / Operador del sistema (RNF-03)

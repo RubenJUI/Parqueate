@@ -13,7 +13,8 @@ class EspacioConnection:
             return cur.fetchone()
 
     def list_all(self, estado: Optional[str] = None, tipo_permitido: Optional[str] = None) -> list:
-        conditions, values = [], []
+        # HU-C05/HU-C06: los espacios cedidos a una conversión y las celdas retiradas no se operan.
+        conditions, values = ["estado NOT IN ('Convertida', 'Retirada')"], []
         if estado is not None:
             conditions.append("estado = %s")
             values.append(estado)
@@ -36,6 +37,7 @@ class EspacioConnection:
                        COUNT(*) FILTER (WHERE estado = 'Disponible') AS disponibles,
                        COUNT(*) FILTER (WHERE estado = 'Mantenimiento') AS mantenimiento
                 FROM espacio
+                WHERE estado NOT IN ('Convertida', 'Retirada')
                 GROUP BY tipo_permitido
                 ORDER BY tipo_permitido
                 """

@@ -110,6 +110,31 @@ def ensure_module2_schema(conn) -> None:
         # 3. Extender tabla espacio para motivo de mantenimiento
         cur.execute("ALTER TABLE espacio ADD COLUMN IF NOT EXISTS motivo_mantenimiento VARCHAR(255)")
 
+        # HU-C05/HU-C06/HU-C07: conversiones de celdas y estados del espacio original y de las celdas retiradas.
+        cur.execute("ALTER TABLE espacio ADD COLUMN IF NOT EXISTS id_conversion INT")
+        cur.execute("ALTER TABLE espacio DROP CONSTRAINT IF EXISTS espacio_estado_check")
+        cur.execute(
+            "ALTER TABLE espacio ADD CONSTRAINT espacio_estado_check "
+            "CHECK (estado IN ('Disponible', 'Ocupado', 'Mantenimiento', 'Convertida', 'Retirada'))"
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversion_celda (
+                id SERIAL PRIMARY KEY,
+                tipo_origen VARCHAR(20) NOT NULL CHECK (tipo_origen IN ('Carro', 'Moto')),
+                codigos_origen TEXT[] NOT NULL,
+                codigos_resultado TEXT[] NOT NULL,
+                motivo VARCHAR(255) NOT NULL,
+                usuario_responsable VARCHAR(100) NOT NULL,
+                fecha_conversion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                activa BOOLEAN NOT NULL DEFAULT TRUE,
+                motivo_restablecimiento VARCHAR(255),
+                usuario_restablecimiento VARCHAR(100),
+                fecha_restablecimiento TIMESTAMP
+            )
+            """
+        )
+
         # 4. Crear tablas de trazabilidad del Módulo 2 si no existen
         cur.execute(
             """
@@ -951,6 +976,35 @@ class Modulo2UsuarioConnection:
         return {"detail": "Usuario eliminado correctamente", "id": id_propietario}
 
 
+# HU-C05/HU-C06: códigos de celda con formato prefijo-número (C-20, M-05).
+REGEX_CODIGO_CELDA = re.compile(r"^([CM])-(\d+)$")
+# Motos originales que forman parejas fijas (M-01 con M-02 ... M-09 con M-10).
+MOTOS_ORIGINALES = 10
+
+
+def _numero_codigo(codigo: str) -> Optional[int]:
+    coincide = REGEX_CODIGO_CELDA.match(codigo or "")
+    return int(coincide.group(2)) if coincide else None
+
+
+def _formato_codigo(prefijo: str, numero: int) -> str:
+    return f"{prefijo}-{numero:02d}"
+
+
+def _pareja_moto(codigo: str) -> Optional[str]:
+    """HU-C06: pareja fija de una moto original; None si la celda no es una de las 10 originales."""
+    if not (codigo or "").startswith("M-"):
+        return None
+    numero = _numero_codigo(codigo)
+    if numero is None or not 1 <= numero <= MOTOS_ORIGINALES:
+        return None
+    return _formato_codigo("M", numero + 1 if numero % 2 else numero - 1)
+
+
+def _unir_codigos(codigos: List[str]) -> str:
+    return " y ".join(codigos)
+
+
 class Modulo2CeldaConnection:
     """Operaciones de base de datos para el Mapa de Celdas y su bitácora en el Módulo 2."""
 
@@ -958,45 +1012,34 @@ class Modulo2CeldaConnection:
         self.conn = conn
 
     def list_celdas(self, codigo_filtro: Optional[str] = None) -> List[dict]:
+        """HU-C01: celdas operables del mapa. Los espacios cedidos a una conversión ('Convertida') y las
+        celdas retiradas no se listan; las celdas resultantes indican el espacio original donde están."""
+        filtro = "AND e.numero_espacio = %s" if codigo_filtro else ""
         with self.conn.cursor() as cur:
-            if codigo_filtro:
-                cur.execute(
-                    """
-                    SELECT e.id_espacio,
-                           e.numero_espacio,
-                           e.tipo_permitido,
-                           e.estado,
-                           e.motivo_mantenimiento,
-                           t.placa AS placa_abierta,
-                           t.fecha_hora_entrada
-                    FROM espacio e
-                    LEFT JOIN tiquete t
-                           ON t.id_espacio = e.id_espacio
-                          AND t.fecha_hora_salida IS NULL
-                          AND NOT t.anulado
-                    WHERE e.numero_espacio = %s
-                    """,
-                    (codigo_filtro,),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT e.id_espacio,
-                           e.numero_espacio,
-                           e.tipo_permitido,
-                           e.estado,
-                           e.motivo_mantenimiento,
-                           t.placa AS placa_abierta,
-                           t.fecha_hora_entrada
-                    FROM espacio e
-                    LEFT JOIN tiquete t
-                           ON t.id_espacio = e.id_espacio
-                          AND t.fecha_hora_salida IS NULL
-                          AND NOT t.anulado
-                    ORDER BY CASE WHEN e.tipo_permitido = 'Carro' THEN 0 ELSE 1 END,
-                             e.numero_espacio ASC
-                    """
-                )
+            cur.execute(
+                f"""
+                SELECT e.id_espacio,
+                       e.numero_espacio,
+                       e.tipo_permitido,
+                       e.estado,
+                       e.motivo_mantenimiento,
+                       e.id_conversion,
+                       c.codigos_origen,
+                       c.tipo_origen,
+                       t.placa AS placa_abierta,
+                       t.fecha_hora_entrada
+                FROM espacio e
+                LEFT JOIN conversion_celda c ON c.id = e.id_conversion
+                LEFT JOIN tiquete t
+                       ON t.id_espacio = e.id_espacio
+                      AND t.fecha_hora_salida IS NULL
+                      AND NOT t.anulado
+                WHERE e.estado NOT IN ('Convertida', 'Retirada') {filtro}
+                ORDER BY CASE WHEN e.tipo_permitido = 'Carro' THEN 0 ELSE 1 END,
+                         e.numero_espacio ASC
+                """,
+                (codigo_filtro,) if codigo_filtro else None,
+            )
             espacios = cur.fetchall()
             if not espacios:
                 return []
@@ -1012,8 +1055,7 @@ class Modulo2CeldaConnection:
 
         hist_por_celda: Dict[str, List[dict]] = {}
         for h in historial_rows:
-            cod = h["codigo_celda"]
-            hist_por_celda.setdefault(cod, []).append(
+            hist_por_celda.setdefault(h["codigo_celda"], []).append(
                 {
                     "id": h["id"],
                     "momento": _formatear_iso(h["fecha_cambio"]),
@@ -1028,6 +1070,7 @@ class Modulo2CeldaConnection:
             codigo = row["numero_espacio"]
             placa_abierta = row.get("placa_abierta")
             fecha_entrada = row.get("fecha_hora_entrada")
+            historial = hist_por_celda.get(codigo, [])
 
             if placa_abierta or row["estado"] == "Ocupado":
                 estado_ui = "Ocupada"
@@ -1036,25 +1079,12 @@ class Modulo2CeldaConnection:
             elif row["estado"] == "Mantenimiento":
                 estado_ui = "Fuera de servicio"
                 hora_str = None
-                hist_celda = hist_por_celda.get(codigo, [])
-                motivo_raw = row.get("motivo_mantenimiento") or (hist_celda[0]["motivo"] if hist_celda else "En mantenimiento")
+                motivo_raw = row.get("motivo_mantenimiento") or (historial[0]["motivo"] if historial else "En mantenimiento")
                 motivo_actual = reparar_mojibake(motivo_raw)
             else:
                 estado_ui = "Libre"
                 hora_str = None
                 motivo_actual = None
-
-            historial = hist_por_celda.get(codigo)
-            if not historial:
-                historial = [
-                    {
-                        "id": row["id_espacio"] * 1000,
-                        "momento": datetime.now().isoformat(),
-                        "usuario": "Administrador",
-                        "accion": "Configuración inicial",
-                        "motivo": "Celda creada y habilitada.",
-                    }
-                ]
 
             resultado.append(
                 {
@@ -1065,7 +1095,12 @@ class Modulo2CeldaConnection:
                     "placa": placa_abierta,
                     "hora": hora_str,
                     "motivo": motivo_actual,
+                    # Sin eventos guardados se devuelve vacío: no se inventa una fecha de configuración.
                     "historial": historial,
+                    "id_conversion": row.get("id_conversion"),
+                    "espacio_original": " y ".join(row["codigos_origen"]) if row.get("codigos_origen") else None,
+                    "tipo_original": row.get("tipo_origen"),
+                    "pareja": _pareja_moto(codigo) if row["tipo_permitido"] == "Moto" and not row.get("id_conversion") else None,
                 }
             )
         return resultado
@@ -1177,6 +1212,15 @@ class Modulo2CeldaConnection:
                 status_code=HTTP_400_BAD_REQUEST,
                 detail="El motivo es obligatorio para modificar el estado o tipo de la celda.",
             )
+        if datos.tipo is not None:
+            # HU-C05/HU-C06: el tipo no se cambia directamente; el espacio se convierte y queda trazado.
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=(
+                    "El tipo de una celda no se cambia directamente: conviértala "
+                    "(una celda de carro en 2 de moto, o una pareja de motos en 1 de carro)."
+                ),
+            )
 
         with self.conn.cursor() as cur:
             cur.execute(
@@ -1192,6 +1236,7 @@ class Modulo2CeldaConnection:
                       AND t.fecha_hora_salida IS NULL
                       AND NOT t.anulado
                 WHERE UPPER(e.numero_espacio) = %s
+                  AND e.estado NOT IN ('Convertida', 'Retirada')
                 """,
                 (codigo_norm,),
             )
@@ -1219,7 +1264,7 @@ class Modulo2CeldaConnection:
             if datos.estado is not None and datos.estado != estado_ui_actual:
                 if datos.estado == "Fuera de servicio":
                     cur.execute(
-                        "SELECT COUNT(*) AS disponibles FROM espacio WHERE tipo_permitido = %s AND estado != 'Mantenimiento'",
+                        "SELECT COUNT(*) AS disponibles FROM espacio WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')",
                         (tipo_actual,),
                     )
                     disponibles = cur.fetchone()["disponibles"]
@@ -1262,51 +1307,6 @@ class Modulo2CeldaConnection:
                     ),
                 )
 
-            # Caso 2: cambio de tipo de celda (Carro <-> Moto)
-            if datos.tipo is not None:
-                if datos.tipo == tipo_actual and datos.estado is None:
-                    raise HTTPException(
-                        status_code=HTTP_400_BAD_REQUEST,
-                        detail=f"La celda {codigo_real} ya está configurada para {tipo_actual}.",
-                    )
-                if datos.tipo != tipo_actual:
-                    if estado_ui_actual != "Fuera de servicio":
-                        cur.execute(
-                            "SELECT COUNT(*) AS disponibles FROM espacio WHERE tipo_permitido = %s AND estado != 'Mantenimiento'",
-                            (tipo_actual,),
-                        )
-                        disponibles = cur.fetchone()["disponibles"]
-                        cupo_requerido = self._contar_cupo_requerido(cur, tipo_actual)
-                        if disponibles - 1 < cupo_requerido:
-                            raise HTTPException(
-                                status_code=HTTP_400_BAD_REQUEST,
-                                detail=(
-                                    f"Cupo garantizado: no se puede cambiar el tipo de {codigo_real} "
-                                    f"porque quedarían {disponibles - 1} celdas disponibles de {tipo_actual.lower()} "
-                                    f"para {cupo_requerido} mensualidades vigentes."
-                                ),
-                            )
-                    cur.execute(
-                        "UPDATE espacio SET tipo_permitido = %s WHERE id_espacio = %s",
-                        (datos.tipo, celda["id_espacio"]),
-                    )
-                    cur.execute(
-                        """
-                        INSERT INTO historial_celda (
-                            codigo_celda, accion, estado_anterior, estado_nuevo, motivo, usuario_responsable
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            sanitizar_bd(codigo_real),
-                            sanitizar_bd(f"Cambio de tipo ({tipo_actual} a {datos.tipo})"),
-                            sanitizar_bd(tipo_actual),
-                            sanitizar_bd(datos.tipo),
-                            sanitizar_bd(motivo),
-                            sanitizar_bd(usuario_responsable),
-                        ),
-                    )
-
         self.conn.commit()
         celdas = self.list_celdas(codigo_filtro=codigo_real)
         return celdas[0]
@@ -1321,6 +1321,7 @@ class Modulo2CeldaConnection:
                        e.numero_espacio,
                        e.tipo_permitido,
                        e.estado,
+                       e.id_conversion,
                        t.placa AS placa_abierta
                 FROM espacio e
                 LEFT JOIN tiquete t
@@ -1328,6 +1329,7 @@ class Modulo2CeldaConnection:
                       AND t.fecha_hora_salida IS NULL
                       AND NOT t.anulado
                 WHERE UPPER(e.numero_espacio) = %s
+                  AND e.estado NOT IN ('Convertida', 'Retirada')
                 """,
                 (codigo_norm,),
             )
@@ -1349,9 +1351,15 @@ class Modulo2CeldaConnection:
                     ),
                 )
 
+            if celda.get("id_conversion"):
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail=f"La celda {codigo_real} resulta de una conversión: para quitarla, restablezca el espacio original.",
+                )
+
             if estado_bd_actual != "Mantenimiento":
                 cur.execute(
-                    "SELECT COUNT(*) AS disponibles FROM espacio WHERE tipo_permitido = %s AND estado != 'Mantenimiento'",
+                    "SELECT COUNT(*) AS disponibles FROM espacio WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')",
                     (tipo_actual,),
                 )
                 disponibles = cur.fetchone()["disponibles"]
@@ -1386,3 +1394,240 @@ class Modulo2CeldaConnection:
 
         self.conn.commit()
         return {"detail": f"Celda {codigo_real} eliminada correctamente", "codigo": codigo_real}
+
+    # ------------------------------------------------------------------
+    # HU-C05 / HU-C06 / HU-C07: conversión y restablecimiento de celdas
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _bloquear_celdas(cur, codigos: List[str]) -> Dict[str, dict]:
+        """Bloquea las celdas indicadas (FOR UPDATE) para que ninguna entrada las tome mientras se convierten."""
+        cur.execute(
+            """
+            SELECT e.id_espacio, e.numero_espacio, e.tipo_permitido, e.estado, e.id_conversion,
+                   t.placa AS placa_abierta
+            FROM espacio e
+            LEFT JOIN tiquete t
+                   ON t.id_espacio = e.id_espacio
+                  AND t.fecha_hora_salida IS NULL
+                  AND NOT t.anulado
+            WHERE UPPER(e.numero_espacio) = ANY(%s)
+            ORDER BY e.id_espacio
+            FOR UPDATE OF e
+            """,
+            ([c.upper() for c in codigos],),
+        )
+        return {row["numero_espacio"].upper(): row for row in cur.fetchall()}
+
+    @staticmethod
+    def _exigir_libre(celda: dict, accion: str) -> None:
+        """La celda debe estar Libre: si está ocupada se informa la placa; si está fuera de servicio, se pide habilitarla."""
+        codigo = celda["numero_espacio"]
+        if celda.get("placa_abierta") or celda["estado"] == "Ocupado":
+            vehiculo = "la moto" if celda["tipo_permitido"] == "Moto" else "el vehículo"
+            placa = celda.get("placa_abierta") or "registrado"
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=f"{accion}: la celda {codigo} está ocupada por {vehiculo} {placa}.",
+            )
+        if celda["estado"] == "Mantenimiento":
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=f"{accion}: la celda {codigo} está fuera de servicio. Habilítela primero.",
+            )
+
+    def _validar_cupo_conversion(self, cur, tipo: str, celdas_que_salen: int, accion: str) -> None:
+        """Cupo garantizado: las celdas utilizables del tipo que pierde espacio deben alcanzar para sus clientes."""
+        cur.execute(
+            "SELECT COUNT(*) AS utilizables FROM espacio WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')",
+            (tipo,),
+        )
+        quedarian = cur.fetchone()["utilizables"] - celdas_que_salen
+        requerido = self._contar_cupo_requerido(cur, tipo)
+        if quedarian < requerido:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"{accion}: quedarían {quedarian} {'celda' if quedarian == 1 else 'celdas'} de {tipo.lower()} "
+                    f"{'utilizable' if quedarian == 1 else 'utilizables'} para {requerido} "
+                    f"{'cliente' if requerido == 1 else 'clientes'} con mensualidad vigente."
+                ),
+            )
+
+    @staticmethod
+    def _siguientes_codigos(cur, prefijo: str, cantidad: int) -> List[str]:
+        """Siguientes códigos consecutivos del tipo. Cuenta también las celdas retiradas y las conversiones
+        pasadas, para que un código nunca se reutilice."""
+        cur.execute(
+            """
+            SELECT numero_espacio AS codigo FROM espacio
+            UNION
+            SELECT UNNEST(codigos_resultado) FROM conversion_celda
+            """
+        )
+        numeros = [
+            _numero_codigo(r["codigo"]) for r in cur.fetchall() if r["codigo"].upper().startswith(f"{prefijo}-")
+        ]
+        mayor = max((n for n in numeros if n), default=0)
+        return [_formato_codigo(prefijo, mayor + i) for i in range(1, cantidad + 1)]
+
+    @staticmethod
+    def _registrar_historial(cur, codigos: List[str], accion: str, anterior: str, nuevo: str, motivo: str, usuario: str) -> None:
+        for codigo in codigos:
+            cur.execute(
+                """
+                INSERT INTO historial_celda (codigo_celda, accion, estado_anterior, estado_nuevo, motivo, usuario_responsable)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (sanitizar_bd(codigo), sanitizar_bd(accion), anterior, nuevo, sanitizar_bd(motivo), sanitizar_bd(usuario)),
+            )
+
+    @staticmethod
+    def _motivo_obligatorio(motivo: str, accion: str) -> str:
+        limpio = reparar_mojibake(motivo or "").strip()
+        if not limpio:
+            raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail=f"Es obligatorio indicar el motivo para {accion}.")
+        return limpio
+
+    def convertir_celda(self, codigo: str, motivo: str, usuario_responsable: str) -> List[dict]:
+        """HU-C05: una celda de carro libre pasa a 2 celdas de moto.
+        HU-C06: una pareja fija de motos originales libres pasa a 1 celda de carro.
+        El espacio original queda 'Convertida' y las celdas nuevas toman los siguientes códigos del tipo."""
+        motivo = self._motivo_obligatorio(motivo, "convertir la celda")
+        codigo_norm = (codigo or "").strip().upper()
+
+        with self.conn.cursor() as cur:
+            celda = self._bloquear_celdas(cur, [codigo_norm]).get(codigo_norm)
+            if not celda or celda["estado"] in ("Convertida", "Retirada"):
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Celda no encontrada")
+            codigo_real = celda["numero_espacio"]
+
+            if celda["id_conversion"]:
+                cur.execute("SELECT codigos_origen FROM conversion_celda WHERE id = %s", (celda["id_conversion"],))
+                origen = _unir_codigos(cur.fetchone()["codigos_origen"])
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"La celda {codigo_real} resulta de una conversión y no se puede volver a convertir. "
+                        f"Si necesita el espacio {origen} como antes, restablézcalo."
+                    ),
+                )
+
+            if celda["tipo_permitido"] == "Carro":
+                accion = f"No se puede convertir la celda {codigo_real} a moto"
+                origen_codigos = [codigo_real]
+                self._exigir_libre(celda, accion)
+                self._validar_cupo_conversion(cur, "Carro", 1, accion)
+                tipo_origen, tipo_nuevo, prefijo, cantidad = "Carro", "Moto", "M", 2
+            else:
+                pareja = _pareja_moto(codigo_real)
+                if not pareja:
+                    raise HTTPException(
+                        status_code=HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"La celda {codigo_real} no se puede convertir a carro: solo se convierten las parejas fijas "
+                            "de motos originales (M-01 con M-02, M-03 con M-04, M-05 con M-06, M-07 con M-08 y M-09 con M-10)."
+                        ),
+                    )
+                origen_codigos = sorted([codigo_real, pareja])
+                accion = f"No se puede convertir la pareja {_unir_codigos(origen_codigos)} a carro"
+                celdas = self._bloquear_celdas(cur, origen_codigos)
+                for cod in origen_codigos:
+                    otra = celdas.get(cod)
+                    if (
+                        not otra
+                        or otra["estado"] in ("Convertida", "Retirada")
+                        or otra["tipo_permitido"] != "Moto"
+                        or otra["id_conversion"]
+                    ):
+                        raise HTTPException(
+                            status_code=HTTP_400_BAD_REQUEST,
+                            detail=f"{accion}: la celda {cod} ya no está disponible como celda de moto.",
+                        )
+                    self._exigir_libre(otra, accion)
+                self._validar_cupo_conversion(cur, "Moto", 2, accion)
+                tipo_origen, tipo_nuevo, prefijo, cantidad = "Moto", "Carro", "C", 1
+
+            nuevos = self._siguientes_codigos(cur, prefijo, cantidad)
+            cur.execute(
+                """
+                INSERT INTO conversion_celda (tipo_origen, codigos_origen, codigos_resultado, motivo, usuario_responsable)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (tipo_origen, origen_codigos, nuevos, sanitizar_bd(motivo), sanitizar_bd(usuario_responsable)),
+            )
+            id_conversion = cur.fetchone()["id"]
+            cur.execute(
+                "UPDATE espacio SET estado = 'Convertida' WHERE UPPER(numero_espacio) = ANY(%s)",
+                ([c.upper() for c in origen_codigos],),
+            )
+            for nuevo in nuevos:
+                cur.execute(
+                    "INSERT INTO espacio (numero_espacio, tipo_permitido, estado, id_conversion) VALUES (%s, %s, 'Disponible', %s)",
+                    (nuevo, tipo_nuevo, id_conversion),
+                )
+
+            # HU-C05/HU-C06: el historial registra, por ejemplo, "M-11 y M-12, antes C-20".
+            accion_historial = f"Conversión a {tipo_nuevo.lower()}: {_unir_codigos(nuevos)}, antes {_unir_codigos(origen_codigos)}"
+            self._registrar_historial(cur, origen_codigos, accion_historial, "Libre", "Convertida", motivo, usuario_responsable)
+            self._registrar_historial(cur, nuevos, accion_historial, "Sin registro", "Libre", motivo, usuario_responsable)
+
+        self.conn.commit()
+        return self.list_celdas()
+
+    def restablecer_celda(self, codigo: str, motivo: str, usuario_responsable: str) -> List[dict]:
+        """HU-C07: deshace una conversión a partir de cualquiera de sus celdas resultantes. Todas deben estar
+        libres y se valida el cupo; el espacio original recupera sus códigos y las celdas resultantes se retiran."""
+        motivo = self._motivo_obligatorio(motivo, "restablecer la celda")
+        codigo_norm = (codigo or "").strip().upper()
+
+        with self.conn.cursor() as cur:
+            celda = self._bloquear_celdas(cur, [codigo_norm]).get(codigo_norm)
+            if not celda or celda["estado"] in ("Convertida", "Retirada"):
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Celda no encontrada")
+            if not celda["id_conversion"]:
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail=f"La celda {celda['numero_espacio']} no resulta de una conversión: no hay nada que restablecer.",
+                )
+
+            cur.execute("SELECT * FROM conversion_celda WHERE id = %s AND activa FOR UPDATE", (celda["id_conversion"],))
+            conversion = cur.fetchone()
+            if not conversion:
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="La conversión ya fue restablecida.")
+
+            origen = list(conversion["codigos_origen"])
+            resultado = list(conversion["codigos_resultado"])
+            tipo_resultado = "Moto" if conversion["tipo_origen"] == "Carro" else "Carro"
+            accion = f"No se puede restablecer el espacio {_unir_codigos(origen)}"
+
+            celdas = self._bloquear_celdas(cur, resultado + origen)
+            for cod in resultado:
+                self._exigir_libre(celdas[cod.upper()], accion)
+            self._validar_cupo_conversion(cur, tipo_resultado, len(resultado), accion)
+
+            cur.execute(
+                "UPDATE espacio SET estado = 'Retirada' WHERE UPPER(numero_espacio) = ANY(%s)",
+                ([c.upper() for c in resultado],),
+            )
+            cur.execute(
+                "UPDATE espacio SET estado = 'Disponible', motivo_mantenimiento = NULL WHERE UPPER(numero_espacio) = ANY(%s)",
+                ([c.upper() for c in origen],),
+            )
+            cur.execute(
+                """
+                UPDATE conversion_celda
+                SET activa = FALSE, motivo_restablecimiento = %s, usuario_restablecimiento = %s,
+                    fecha_restablecimiento = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (sanitizar_bd(motivo), sanitizar_bd(usuario_responsable), conversion["id"]),
+            )
+
+            accion_historial = f"Restablecimiento: {_unir_codigos(origen)}, antes {_unir_codigos(resultado)}"
+            self._registrar_historial(cur, origen, accion_historial, "Convertida", "Libre", motivo, usuario_responsable)
+            self._registrar_historial(cur, resultado, accion_historial, "Libre", "Retirada", motivo, usuario_responsable)
+
+        self.conn.commit()
+        return self.list_celdas()

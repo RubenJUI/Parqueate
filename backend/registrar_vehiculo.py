@@ -44,7 +44,10 @@ def verificar_cupo(cur, placa: str, tipo: str, fecha_pago: date) -> None:
     mensualidad vigente ese día; la placa que se registra suma uno (una renovación no ocupa cupo extra)."""
     # Serializa los registros de pagos para que dos ejecuciones simultáneas no tomen el mismo cupo.
     cur.execute("LOCK TABLE pago IN SHARE ROW EXCLUSIVE MODE")
-    cur.execute("SELECT COUNT(*) AS celdas FROM espacio WHERE tipo_permitido = %s", (tipo,))
+    cur.execute(
+        "SELECT COUNT(*) AS celdas FROM espacio WHERE tipo_permitido = %s AND estado NOT IN ('Convertida', 'Retirada')",
+        (tipo,),
+    )
     celdas = cur.fetchone()["celdas"]
     cur.execute(
         """
