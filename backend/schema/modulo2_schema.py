@@ -91,6 +91,12 @@ class VehiculoAsociarSchema(BaseModel):
     color: str
 
 
+class EliminacionSchema(BaseModel):
+    """Solicitud de eliminación de un usuario o vehículo registrado por error (HU-U08), con motivo obligatorio."""
+
+    motivo: str
+
+
 class CambioEstadoSchema(BaseModel):
     """Solicitud de inactivación o reactivación de un usuario o vehículo con motivo obligatorio."""
 

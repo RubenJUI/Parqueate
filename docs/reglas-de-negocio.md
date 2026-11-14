@@ -79,7 +79,8 @@ Las fechas del documento se reproducen relativas al día de la prueba: "pago del
 | RN-04 Vigencia de 30 días | `calcular_vigencia` | `test_vigencia.py` |
 | RN-05 Vencida no entra | Validación de la entrada | `test_cu2_…` |
 | RNF-02 Máximo 3 pasos | Placa, celda (automática) y novedad opcional en una sola pantalla | Prueba manual |
-| RNF-03 Autenticación y roles | JWT; anular solo administrador | `test_rnf03_requiere_autenticacion`, `test_rnf05_solo_el_administrador_…` |
+| RNF-03 Autenticación y roles | JWT; solo el administrador anula, administra celdas (inicializar, crear, cambiar, eliminar), cambia el estado de usuarios y vehículos y los elimina. El selector de vista del dock solo lo ve el administrador | `test_rnf03_requiere_autenticacion`, `test_rnf03_operario_no_administra_…` (6 rutas), `test_rnf03_administrador_inicializa_…`, `test_rnf05_solo_el_administrador_…` |
+| HU-U08 Eliminar registros hechos por error | Solo administrador y con motivo; se rechaza si hay entradas, salidas (aun anuladas) o pagos de caja, sugiriendo inactivar. El pago automático del registro (`pago.origen = 'Registro'`) no cuenta. La constancia queda en `registro_eliminacion`, que sobrevive al borrado | `tests/test_eliminacion.py` (7 pruebas) |
 | RNF-04 Concurrencia | `FOR UPDATE SKIP LOCKED` e índices únicos parciales | Índices verificados por `test_cu4_…` |
 | RNF-05 Trazabilidad sin borrados | Operario y hora en cada registro; anulación con motivo; sin DELETE | `test_rnf05_…` (2 pruebas) |
 | RNF-07 Respaldo diario | `respaldo.sh` programado con `instalar_respaldo.sh` | Prueba manual (respaldo y restauración) |

@@ -9,6 +9,7 @@ from schema.modulo2_schema import (
     CambioEstadoSchema,
     CeldaActualizarSchema,
     CeldaCrearSchema,
+    EliminacionSchema,
     UsuarioCrearSchema,
     UsuarioEditarSchema,
     VehiculoAsociarSchema,
@@ -136,6 +137,27 @@ def ensure_module2_schema(conn) -> None:
                 motivo VARCHAR(255) NOT NULL,
                 usuario_responsable VARCHAR(100) NOT NULL,
                 fecha_cambio TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # HU-U08: origen del pago y constancia de eliminaciones que sobrevive al borrado.
+        cur.execute(
+            "ALTER TABLE pago ADD COLUMN IF NOT EXISTS origen VARCHAR(20) NOT NULL DEFAULT 'Caja' "
+            "CHECK (origen IN ('Caja', 'Registro'))"
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS registro_eliminacion (
+                id SERIAL PRIMARY KEY,
+                tipo_registro VARCHAR(20) NOT NULL CHECK (tipo_registro IN ('Usuario', 'Vehiculo')),
+                id_propietario INT,
+                documento VARCHAR(20),
+                nombre VARCHAR(200),
+                placas VARCHAR(255),
+                detalle TEXT,
+                motivo VARCHAR(255) NOT NULL,
+                usuario_responsable VARCHAR(100) NOT NULL,
+                fecha_eliminacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -367,7 +389,7 @@ class Modulo2UsuarioConnection:
         tarifa_row = cur.fetchone()
         monto = tarifa_row["valor_mensual"] if tarifa_row else (250000 if tipo_vehiculo == "Carro" else 100000)
         cur.execute(
-            "INSERT INTO pago (placa, fecha_pago, monto) VALUES (%s, CURRENT_DATE, %s)",
+            "INSERT INTO pago (placa, fecha_pago, monto, origen) VALUES (%s, CURRENT_DATE, %s, 'Registro')",
             (placa, monto),
         )
 
@@ -764,8 +786,71 @@ class Modulo2UsuarioConnection:
         self.conn.commit()
         return self.get_usuario(veh["id_propietario"])
 
-    def eliminar_vehiculo(self, placa: str, usuario_responsable: str) -> dict:
-        """Elimina/retira definitivamente un vehículo de un usuario siempre que no tenga entrada abierta."""
+    @staticmethod
+    def _motivo_eliminacion(datos: EliminacionSchema) -> str:
+        motivo = reparar_mojibake(datos.motivo or "").strip()
+        if not motivo:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail="Es obligatorio indicar el motivo de la eliminación.",
+            )
+        return motivo
+
+    @staticmethod
+    def _contar_movimientos(cur, placas: List[str]) -> Dict[str, int]:
+        """Cuenta entradas/salidas (tiquetes, incluidos los anulados, con sus novedades) y pagos hechos en caja.
+
+        El pago inicial automático del registro (origen 'Registro') no es un movimiento.
+        """
+        if not placas:
+            return {"tiquetes": 0, "pagos": 0}
+        cur.execute("SELECT COUNT(*) AS total FROM tiquete WHERE placa = ANY(%s)", (placas,))
+        tiquetes = cur.fetchone()["total"]
+        cur.execute(
+            "SELECT COUNT(*) AS total FROM pago WHERE placa = ANY(%s) AND origen <> 'Registro'",
+            (placas,),
+        )
+        pagos = cur.fetchone()["total"]
+        return {"tiquetes": tiquetes, "pagos": pagos}
+
+    @staticmethod
+    def _describir_movimientos(movimientos: Dict[str, int]) -> str:
+        partes = []
+        if movimientos["tiquetes"]:
+            n = movimientos["tiquetes"]
+            partes.append(f"{n} {'registro' if n == 1 else 'registros'} de entrada/salida")
+        if movimientos["pagos"]:
+            n = movimientos["pagos"]
+            partes.append(f"{n} {'pago' if n == 1 else 'pagos'}")
+        return " y ".join(partes)
+
+    @staticmethod
+    def _registrar_eliminacion(cur, tipo: str, prop: dict, placas: List[str], detalle: str, motivo: str, usuario_responsable: str) -> None:
+        cur.execute(
+            """
+            INSERT INTO registro_eliminacion (
+                tipo_registro, id_propietario, documento, nombre, placas, detalle, motivo, usuario_responsable
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                tipo,
+                prop["id_propietario"],
+                prop.get("documento"),
+                sanitizar_bd(reparar_mojibake(prop.get("nombre") or "")),
+                ", ".join(placas),
+                sanitizar_bd(detalle),
+                sanitizar_bd(motivo),
+                sanitizar_bd(usuario_responsable),
+            ),
+        )
+
+    def eliminar_vehiculo(self, placa: str, datos: EliminacionSchema, usuario_responsable: str) -> dict:
+        """HU-U08: elimina un vehículo registrado por error, solo si no tiene movimientos.
+
+        Si tiene entradas, salidas o pagos, se rechaza y se sugiere inactivarlo; el historial no se toca.
+        """
+        motivo = self._motivo_eliminacion(datos)
         placa_norm = re.sub(r"[\s-]+", "", placa or "").upper()
         with self.conn.cursor() as cur:
             cur.execute("SELECT * FROM vehiculo WHERE placa = %s", (placa_norm,))
@@ -773,60 +858,59 @@ class Modulo2UsuarioConnection:
             if not veh:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Vehículo no encontrado")
 
-            cur.execute(
-                """
-                SELECT t.placa, e.numero_espacio
-                FROM tiquete t
-                JOIN espacio e ON e.id_espacio = t.id_espacio
-                WHERE t.placa = %s
-                  AND t.fecha_hora_salida IS NULL
-                  AND NOT t.anulado
-                LIMIT 1
-                """,
-                (placa_norm,),
-            )
-            abierto = cur.fetchone()
-            if abierto:
+            movimientos = self._contar_movimientos(cur, [placa_norm])
+            if movimientos["tiquetes"] or movimientos["pagos"]:
                 raise HTTPException(
-                    status_code=HTTP_400_BAD_REQUEST,
+                    status_code=HTTP_409_CONFLICT,
                     detail=(
                         f"No se puede eliminar el vehículo {placa_norm} porque tiene "
-                        f"una entrada abierta en la celda {abierto['numero_espacio']}."
+                        f"{self._describir_movimientos(movimientos)}. Su historial se conserva: "
+                        "inactívelo en su lugar."
                     ),
                 )
 
             id_propietario = veh["id_propietario"]
+            cur.execute("SELECT * FROM propietario WHERE id_propietario = %s", (id_propietario,))
+            prop = cur.fetchone()
             tipo_v = veh["tipo_vehiculo"]
             marca_v = reparar_mojibake(veh.get("marca") or "Sin marca")
             color_v = reparar_mojibake(veh.get("color") or "Sin color")
+            detalle = f"{placa_norm} · {tipo_v} · {marca_v} · {color_v}"
 
-            cur.execute("DELETE FROM pago WHERE placa = %s", (placa_norm,))
-            cur.execute("DELETE FROM tiquete WHERE placa = %s", (placa_norm,))
+            # Solo puede quedar el pago automático del registro, que se va con el vehículo.
+            cur.execute("DELETE FROM pago WHERE placa = %s AND origen = 'Registro'", (placa_norm,))
             cur.execute("DELETE FROM vehiculo WHERE placa = %s", (placa_norm,))
 
             cur.execute(
                 """
                 INSERT INTO auditoria_usuario (
                     id_propietario, placa_vehiculo, campo_modificado,
-                    valor_anterior, valor_nuevo, usuario_responsable
+                    valor_anterior, valor_nuevo, motivo, usuario_responsable
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     id_propietario,
                     placa_norm,
-                    sanitizar_bd(f"Retiro de vehículo ({placa_norm})"),
-                    sanitizar_bd(f"{placa_norm} · {tipo_v} · {marca_v} · {color_v}"),
-                    sanitizar_bd("Vehículo eliminado del titular"),
+                    sanitizar_bd(f"Eliminación de vehículo ({placa_norm})"),
+                    sanitizar_bd(detalle),
+                    sanitizar_bd("Vehículo eliminado (registrado por error)"),
+                    sanitizar_bd(motivo),
                     sanitizar_bd(usuario_responsable),
                 ),
             )
+            self._registrar_eliminacion(cur, "Vehiculo", prop, [placa_norm], detalle, motivo, usuario_responsable)
 
         self.conn.commit()
         return self.get_usuario(id_propietario)
 
-    def eliminar_usuario(self, id_propietario: int, usuario_responsable: str) -> dict:
-        """Elimina un usuario y sus vehículos asociados siempre que ninguno esté dentro del parqueadero."""
+    def eliminar_usuario(self, id_propietario: int, datos: EliminacionSchema, usuario_responsable: str) -> dict:
+        """HU-U08: elimina un usuario registrado por error y sus vehículos, solo si ninguno tiene movimientos.
+
+        La constancia (quién, cuándo, por qué y qué se eliminó) queda en `registro_eliminacion`,
+        que no depende del usuario y por eso sobrevive al borrado.
+        """
+        motivo = self._motivo_eliminacion(datos)
         with self.conn.cursor() as cur:
             cur.execute("SELECT * FROM propietario WHERE id_propietario = %s", (id_propietario,))
             prop = cur.fetchone()
@@ -834,36 +918,32 @@ class Modulo2UsuarioConnection:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
 
             cur.execute(
-                """
-                SELECT t.placa, e.numero_espacio
-                FROM tiquete t
-                JOIN vehiculo v ON v.placa = t.placa
-                JOIN espacio e ON e.id_espacio = t.id_espacio
-                WHERE v.id_propietario = %s
-                  AND t.fecha_hora_salida IS NULL
-                  AND NOT t.anulado
-                LIMIT 1
-                """,
+                "SELECT placa, tipo_vehiculo FROM vehiculo WHERE id_propietario = %s ORDER BY placa",
                 (id_propietario,),
             )
-            abierto = cur.fetchone()
-            if abierto:
+            vehiculos = cur.fetchall()
+            placas = [v["placa"] for v in vehiculos]
+
+            movimientos = self._contar_movimientos(cur, placas)
+            if movimientos["tiquetes"] or movimientos["pagos"]:
                 raise HTTPException(
-                    status_code=HTTP_400_BAD_REQUEST,
+                    status_code=HTTP_409_CONFLICT,
                     detail=(
-                        f"No se puede eliminar al usuario porque el vehículo {abierto['placa']} "
-                        f"tiene una entrada abierta en la celda {abierto['numero_espacio']}."
+                        "No se puede eliminar el usuario porque sus vehículos tienen "
+                        f"{self._describir_movimientos(movimientos)}. Su historial se conserva: "
+                        "inactívelo en su lugar."
                     ),
                 )
 
-            cur.execute("SELECT placa FROM vehiculo WHERE id_propietario = %s", (id_propietario,))
-            placas = [r["placa"] for r in cur.fetchall()]
-            if placas:
-                cur.execute("DELETE FROM pago WHERE placa = ANY(%s)", (placas,))
-                cur.execute("DELETE FROM tiquete WHERE placa = ANY(%s)", (placas,))
-                cur.execute("DELETE FROM vehiculo WHERE id_propietario = %s", (id_propietario,))
+            nombre = reparar_mojibake(prop.get("nombre") or "")
+            vehiculos_txt = ", ".join(f"{v['placa']} ({v['tipo_vehiculo']})" for v in vehiculos) or "sin vehículos"
+            detalle = f"{prop.get('tipo_documento') or 'CC'} {prop['documento']} · {nombre} · Vehículos: {vehiculos_txt}"
+            self._registrar_eliminacion(cur, "Usuario", prop, placas, detalle, motivo, usuario_responsable)
 
-            cur.execute("DELETE FROM auditoria_usuario WHERE id_propietario = %s", (id_propietario,))
+            if placas:
+                cur.execute("DELETE FROM pago WHERE placa = ANY(%s) AND origen = 'Registro'", (placas,))
+                cur.execute("DELETE FROM vehiculo WHERE id_propietario = %s", (id_propietario,))
+            # La bitácora del usuario se borra en cascada con él; la constancia queda en registro_eliminacion.
             cur.execute("DELETE FROM propietario WHERE id_propietario = %s", (id_propietario,))
 
         self.conn.commit()

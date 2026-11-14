@@ -2,6 +2,8 @@
 
 from datetime import date
 
+import pytest
+
 
 def test_rf04_alerta_tres_dias(client, operario, registrar):
     registrar("DEF456", dias_desde_pago=26)
@@ -94,6 +96,35 @@ def test_rnf05_solo_el_administrador_anula_y_el_registro_se_conserva(client, ope
     assert anulado["usuario_anulacion"] == "Usuario Administrador"
     assert ocupacion("Carro") == "0/70"
     assert [t["estado"] for t in client.get("/api/tiquetes", headers=admin).json()] == ["Anulado"]
+
+
+# RNF-03: acciones de administración de celdas y de estado y eliminación de usuarios y vehículos.
+# El backend exige el rol aunque la interfaz oculte los botones al operario.
+RUTAS_SOLO_ADMIN = [
+    ("patch", "/api/usuarios/1/estado"),
+    ("patch", "/api/vehiculos/ABC123/estado"),
+    ("post", "/api/celdas/inicializar"),
+    ("post", "/api/celdas"),
+    ("patch", "/api/celdas/C-01"),
+    ("delete", "/api/celdas/C-01"),
+    # HU-U08: eliminar usuarios y vehículos es solo del administrador.
+    ("delete", "/api/usuarios/1"),
+    ("delete", "/api/vehiculos/ABC123"),
+]
+
+
+@pytest.mark.parametrize("metodo, url", RUTAS_SOLO_ADMIN)
+def test_rnf03_operario_no_administra_celdas_ni_estados(client, operario, metodo, url):
+    kwargs = {} if metodo == "delete" else {"json": {}}
+    response = getattr(client, metodo)(url, headers=operario, **kwargs)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Se requiere rol de administrador"
+
+
+def test_rnf03_administrador_inicializa_celdas_y_operario_las_consulta(client, operario, admin):
+    assert client.post("/api/celdas/inicializar", headers=admin).status_code == 200
+    assert client.get("/api/celdas", headers=operario).status_code == 200
 
 
 def test_rnf05_no_hay_endpoints_de_borrado(client, admin):

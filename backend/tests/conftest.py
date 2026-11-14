@@ -50,6 +50,7 @@ def limpiar(db):
     """Cada prueba empieza sin movimientos, usuarios ni vehículos y con las 80 celdas libres."""
     with db.cursor() as cur:
         cur.execute("TRUNCATE tiquete, pago, vehiculo, propietario, usuario RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE registro_eliminacion RESTART IDENTITY")
         cur.execute("UPDATE espacio SET estado = 'Disponible'")
 
 

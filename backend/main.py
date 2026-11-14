@@ -31,6 +31,7 @@ from schema.modulo2_schema import (
     CeldaActualizarSchema,
     CeldaCrearSchema,
     CeldaModulo2Out,
+    EliminacionSchema,
     UsuarioCrearSchema,
     UsuarioEditarSchema,
     UsuarioModulo2Out,
@@ -446,10 +447,10 @@ def asociar_vehiculo_modulo2(
 def cambiar_estado_usuario_modulo2(
     id_propietario: int,
     datos: CambioEstadoSchema,
-    current_user: UsuarioOut = Depends(get_current_active_user),
+    current_user: UsuarioOut = Depends(get_current_admin_user),
     conn=Depends(get_db),
 ):
-    """Inactiva o reactiva un usuario exigiendo motivo obligatorio y bloqueando si tiene vehículo dentro (RN-U06)."""
+    """Inactiva o reactiva un usuario (solo Administrador) exigiendo motivo obligatorio y bloqueando si tiene vehículo dentro (RN-U06)."""
     return Modulo2UsuarioConnection(conn).cambiar_estado_usuario(
         id_propietario, datos, usuario_responsable=current_user.nombre
     )
@@ -464,10 +465,10 @@ def cambiar_estado_usuario_modulo2(
 def cambiar_estado_vehiculo_modulo2(
     placa: str,
     datos: CambioEstadoSchema,
-    current_user: UsuarioOut = Depends(get_current_active_user),
+    current_user: UsuarioOut = Depends(get_current_admin_user),
     conn=Depends(get_db),
 ):
-    """Inactiva o reactiva un vehículo exigiendo motivo obligatorio y bloqueando si tiene entrada abierta (RN-U06)."""
+    """Inactiva o reactiva un vehículo (solo Administrador) exigiendo motivo obligatorio y bloqueando si tiene entrada abierta (RN-U06)."""
     return Modulo2UsuarioConnection(conn).cambiar_estado_vehiculo(
         placa, datos, usuario_responsable=current_user.nombre
     )
@@ -481,12 +482,13 @@ def cambiar_estado_vehiculo_modulo2(
 )
 def eliminar_vehiculo_modulo2(
     placa: str,
-    current_user: UsuarioOut = Depends(get_current_active_user),
+    datos: EliminacionSchema,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
     conn=Depends(get_db),
 ):
-    """Retira o elimina un vehículo de un usuario cuando ya no pertenece al propietario, bloqueando si está dentro."""
+    """HU-U08 (solo Administrador): elimina un vehículo registrado por error si no tiene movimientos; exige motivo."""
     return Modulo2UsuarioConnection(conn).eliminar_vehiculo(
-        placa, usuario_responsable=current_user.nombre
+        placa, datos, usuario_responsable=current_user.nombre
     )
 
 
@@ -497,12 +499,13 @@ def eliminar_vehiculo_modulo2(
 )
 def eliminar_usuario_modulo2(
     id_propietario: int,
-    current_user: UsuarioOut = Depends(get_current_active_user),
+    datos: EliminacionSchema,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
     conn=Depends(get_db),
 ):
-    """Elimina un usuario y sus vehículos asociados siempre que ninguno esté dentro del parqueadero."""
+    """HU-U08 (solo Administrador): elimina un usuario registrado por error y sus vehículos si no tienen movimientos."""
     return Modulo2UsuarioConnection(conn).eliminar_usuario(
-        id_propietario, usuario_responsable=current_user.nombre
+        id_propietario, datos, usuario_responsable=current_user.nombre
     )
 
 
@@ -525,10 +528,10 @@ def listar_celdas_modulo2(conn=Depends(get_db)):
     tags=["Celdas"],
 )
 def inicializar_celdas_modulo2(
-    current_user: UsuarioOut = Depends(get_current_active_user),
+    current_user: UsuarioOut = Depends(get_current_admin_user),
     conn=Depends(get_db),
 ):
-    """Crea o asegura las 70 celdas de carro (C-01 a C-70) y 10 de moto (M-01 a M-10) sin borrar las existentes."""
+    """Crea o asegura (solo Administrador) las 70 celdas de carro (C-01 a C-70) y 10 de moto (M-01 a M-10) sin borrar las existentes."""
     return Modulo2CeldaConnection(conn).inicializar_celdas(usuario_responsable=current_user.nombre)
 
 
@@ -540,10 +543,10 @@ def inicializar_celdas_modulo2(
 )
 def crear_celda_modulo2(
     datos: CeldaCrearSchema,
-    current_user: UsuarioOut = Depends(get_current_active_user),
+    current_user: UsuarioOut = Depends(get_current_admin_user),
     conn=Depends(get_db),
 ):
-    """Crea una celda nueva validando código único y registrando su creación en `historial_celda`."""
+    """Crea una celda nueva (solo Administrador) validando código único y registrando su creación en `historial_celda`."""
     return Modulo2CeldaConnection(conn).crear_celda(datos, usuario_responsable=current_user.nombre)
 
 
@@ -556,10 +559,10 @@ def crear_celda_modulo2(
 def actualizar_celda_modulo2(
     codigo: str,
     datos: CeldaActualizarSchema,
-    current_user: UsuarioOut = Depends(get_current_active_user),
+    current_user: UsuarioOut = Depends(get_current_admin_user),
     conn=Depends(get_db),
 ):
-    """Permite cambiar el estado operativo o el tipo de una celda libre validando cupo garantizado y motivo obligatorio."""
+    """Permite al Administrador cambiar el estado operativo o el tipo de una celda libre validando cupo garantizado y motivo obligatorio."""
     return Modulo2CeldaConnection(conn).actualizar_celda(
         codigo, datos, usuario_responsable=current_user.nombre
     )

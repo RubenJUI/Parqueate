@@ -277,10 +277,11 @@ function Operations({
           <button aria-label="Pagos" className={`dock-item ${opTab === 'payments' ? 'active' : ''}`} onClick={() => setOpTab('payments')}><Icon name="card" size={18} /><span>Pagos</span></button>
           <button aria-label="Configuración" className={`dock-item ${opTab === 'config' ? 'active' : ''}`} onClick={() => setOpTab('config')}><Icon name="settings" size={18} /><span>Configuración</span></button>
         </div>
-        <div className="dock-role-switch" aria-label="Cambio de rol">
+        {/* Solo el administrador puede previsualizar la vista del operario; un operario nunca ve este selector. */}
+        {user.rol === 'Administrador' && <div className="dock-role-switch" aria-label="Vista previa por rol">
           <button className={roleMode === 'Operario' ? 'active' : ''} onClick={() => setRoleMode('Operario')} type="button">Operario</button>
           <button className={roleMode === 'Administrador' ? 'active' : ''} onClick={() => setRoleMode('Administrador')} type="button">Administrador</button>
-        </div>
+        </div>}
         <span className="dock-divider" />
         <button className={`dock-profile ${profileOpen ? 'active' : ''}`} onClick={() => setProfileOpen(!profileOpen)} aria-label="Perfil"><div className="avatar">{initials(user.nombre)}</div><span className={`role-indicator ${user.rol === 'Administrador' ? 'admin' : 'operator'}`} /></button>
       </nav>
@@ -577,7 +578,8 @@ function UsersModule({
   cellStateFilter: CellStateFilterOption
   setCellStateFilter: React.Dispatch<React.SetStateAction<CellStateFilterOption>>
 }) {
-  const isAdmin = roleMode === 'Administrador'
+  // El selector de vista solo puede restar permisos: sin el rol real de administrador nunca se habilitan sus acciones.
+  const isAdmin = user.rol === 'Administrador' && roleMode === 'Administrador'
   const currentOperatorName = user.nombre || (isAdmin ? 'Administrador' : 'Operario')
   const [search, setSearch] = useState('')
   const [estadoFilter, setEstadoFilter] = useState<'Todos' | 'Activos' | 'Inactivos'>('Todos')
@@ -608,8 +610,24 @@ function UsersModule({
     targetId: number | string
     title: string
     description: string
+    // HU-U08: si la eliminación se rechaza por movimientos, se ofrece inactivar (solo si está activo).
+    inactivate?: { userId: number; kind: 'user' | 'vehicle'; vehicleId?: number }
   } | null>(null)
   const [deleteModalError, setDeleteModalError] = useState('')
+  const [deleteReason, setDeleteReason] = useState('')
+  const [deleteBlockedByHistory, setDeleteBlockedByHistory] = useState(false)
+  const closeDeleteModal = () => {
+    setConfirmDeleteModal(null)
+    setDeleteModalError('')
+    setDeleteReason('')
+    setDeleteBlockedByHistory(false)
+  }
+  const openDeleteModal = (modal: NonNullable<typeof confirmDeleteModal>) => {
+    setDeleteModalError('')
+    setDeleteReason('')
+    setDeleteBlockedByHistory(false)
+    setConfirmDeleteModal(modal)
+  }
 
   useEffect(() => {
     if (openActionsUserId === null) return
@@ -911,16 +929,21 @@ function UsersModule({
   const handleConfirmDelete = async () => {
     if (!confirmDeleteModal) return
     setDeleteModalError('')
+    const reason = deleteReason.trim()
+    if (confirmDeleteModal.kind !== 'cell' && !reason) {
+      setDeleteModalError('Es obligatorio indicar el motivo de la eliminación.')
+      return
+    }
     try {
       if (confirmDeleteModal.kind === 'user') {
         const userId = Number(confirmDeleteModal.targetId)
-        await deleteModule2User(userId)
+        await deleteModule2User(userId, reason)
         setUsers((prev) => prev.filter((u) => u.id !== userId))
         setRegisterSuccess('Usuario eliminado correctamente del directorio.')
         setTimeout(() => setRegisterSuccess(''), 2800)
       } else if (confirmDeleteModal.kind === 'vehicle') {
         const placa = String(confirmDeleteModal.targetId)
-        const updatedUser = await deleteModule2Vehicle(placa)
+        const updatedUser = await deleteModule2Vehicle(placa, reason)
         setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)))
         setRegisterSuccess(`Vehículo ${placa} retirado del usuario satisfactoriamente.`)
         setTimeout(() => setRegisterSuccess(''), 2800)
@@ -935,8 +958,9 @@ function UsersModule({
         setCellReason('')
         setCellActionError('')
       }
-      setConfirmDeleteModal(null)
+      closeDeleteModal()
     } catch (err) {
+      setDeleteBlockedByHistory(confirmDeleteModal.kind !== 'cell' && err instanceof ApiError && err.status === 409)
       setDeleteModalError(errorMessage(err))
     }
   }
@@ -1021,23 +1045,23 @@ function UsersModule({
                                   {vehicle.estado === 'Activo' ? 'Inactivar' : 'Reactivar'}
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                className="vehicle-delete-btn"
-                                disabled={!!openEntry}
-                                title={openEntry ? `El vehículo ${vehicle.placa} está actualmente en la celda ${openEntry.celda}` : `Retirar vehículo ${vehicle.placa} de ${u.nombres} ${u.apellidos}`}
-                                onClick={() => {
-                                  setDeleteModalError('')
-                                  setConfirmDeleteModal({
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  className="vehicle-delete-btn"
+                                  disabled={!!openEntry}
+                                  title={openEntry ? `El vehículo ${vehicle.placa} está actualmente en la celda ${openEntry.celda}` : `Eliminar el vehículo ${vehicle.placa} registrado por error`}
+                                  onClick={() => openDeleteModal({
                                     kind: 'vehicle',
                                     targetId: vehicle.placa,
-                                    title: `Eliminar / retirar vehículo ${vehicle.placa}`,
-                                    description: `¿Confirmas que deseas retirar el vehículo ${vehicle.placa} (${vehicle.tipo} · ${vehicle.marca} ${vehicle.color}) del usuario ${u.nombres} ${u.apellidos}? El propietario conservará su cuenta y el retiro quedará registrado en su historial.`,
-                                  })
-                                }}
-                              >
-                                Eliminar
-                              </button>
+                                    title: `Eliminar vehículo ${vehicle.placa}`,
+                                    description: `Elimina el vehículo ${vehicle.placa} (${vehicle.tipo} · ${vehicle.marca} ${vehicle.color}) de ${u.nombres} ${u.apellidos} solo si se registró por error. Si ya tiene entradas, salidas o pagos no se puede eliminar: debes inactivarlo para conservar su historial.`,
+                                    inactivate: vehicle.estado === 'Activo' ? { userId: u.id, kind: 'vehicle', vehicleId: vehicle.id } : undefined,
+                                  })}
+                                >
+                                  Eliminar
+                                </button>
+                              )}
                             </div>
                           )
                         })}
@@ -1105,7 +1129,7 @@ function UsersModule({
                                 {u.estado === 'Activo' ? '🚫 Inactivar usuario' : '✅ Reactivar usuario'}
                               </button>
                             )}
-                            {!hasVehicleInside && (
+                            {isAdmin && !hasVehicleInside && (
                               <>
                                 <div className="actions-dropdown-divider" />
                                 <button
@@ -1113,12 +1137,12 @@ function UsersModule({
                                   className="actions-dropdown-item danger"
                                   onClick={() => {
                                     setOpenActionsUserId(null)
-                                    setDeleteModalError('')
-                                    setConfirmDeleteModal({
+                                    openDeleteModal({
                                       kind: 'user',
                                       targetId: u.id,
                                       title: `Eliminar usuario ${u.nombres} ${u.apellidos}`,
-                                      description: `¿Confirmas que deseas eliminar el usuario ${u.nombres} ${u.apellidos} (${u.documentoTipo} ${u.documento}) junto con sus vehículos asociados? Esta acción solo está permitida porque ninguno de sus vehículos se encuentra dentro del parqueadero.`,
+                                      description: `Elimina a ${u.nombres} ${u.apellidos} (${u.documentoTipo} ${u.documento}) y sus vehículos solo si se registró por error. Si alguno de sus vehículos ya tiene entradas, salidas o pagos no se puede eliminar: debes inactivarlo para conservar su historial.`,
+                                      inactivate: u.estado === 'Activo' ? { userId: u.id, kind: 'user' } : undefined,
                                     })
                                   }}
                                 >
@@ -1189,7 +1213,7 @@ function UsersModule({
             {isAdmin ? (
               <button className="primary-btn" onClick={initializeCells}>Ejecutar configuración inicial (70 Carros / 10 Motos)</button>
             ) : (
-              <small>Cambia al modo Administrador en el dock inferior para ejecutar la configuración inicial.</small>
+              <small>{user.rol === 'Administrador' ? 'Cambia al modo Administrador en el dock inferior para ejecutar la configuración inicial.' : 'Solicita al administrador que ejecute la configuración inicial.'}</small>
             )}
           </div>
         </div>
@@ -1738,20 +1762,32 @@ function UsersModule({
 
       {/* Modal f) Confirmación de eliminación (Usuario / Vehículo / Celda) */}
       {confirmDeleteModal && (
-        <div className="modal-backdrop" onMouseDown={() => { setConfirmDeleteModal(null); setDeleteModalError('') }}>
+        <div className="modal-backdrop" onMouseDown={closeDeleteModal}>
           <div className="modal-card" onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div>
                 <h2>{confirmDeleteModal.title}</h2>
                 <p>Confirma esta acción para aplicarla en la base de datos.</p>
               </div>
-              <button className="icon-btn" onClick={() => { setConfirmDeleteModal(null); setDeleteModalError('') }} aria-label="Cerrar"><Icon name="x" /></button>
+              <button className="icon-btn" onClick={closeDeleteModal} aria-label="Cerrar"><Icon name="x" /></button>
             </div>
             <div className="modal-body">
               <div className="notice notice-amber">
                 <Icon name="alert" size={18} />
                 <span>{confirmDeleteModal.description}</span>
               </div>
+              {confirmDeleteModal.kind !== 'cell' && !deleteBlockedByHistory && (
+                <div className="field">
+                  <label>Motivo obligatorio</label>
+                  <input
+                    value={deleteReason}
+                    onChange={(e) => { setDeleteReason(e.target.value); setDeleteModalError('') }}
+                    placeholder="Ej. Documento digitado con error al registrar"
+                    autoFocus
+                  />
+                  <small>Queda registrado quién eliminó, cuándo y por qué.</small>
+                </div>
+              )}
               {deleteModalError && (
                 <div className="notice notice-red">
                   <Icon name="alert" size={16} />
@@ -1760,10 +1796,28 @@ function UsersModule({
               )}
             </div>
             <div className="modal-actions">
-              <button className="secondary-btn" onClick={() => { setConfirmDeleteModal(null); setDeleteModalError('') }}>Cancelar</button>
-              <button className="secondary-btn danger" onClick={handleConfirmDelete}>
-                Confirmar eliminación
-              </button>
+              <button className="secondary-btn" onClick={closeDeleteModal}>{deleteBlockedByHistory ? 'Cerrar' : 'Cancelar'}</button>
+              {deleteBlockedByHistory ? (
+                confirmDeleteModal.inactivate && (
+                  <button
+                    className="primary-btn"
+                    onClick={() => {
+                      const target = confirmDeleteModal.inactivate
+                      closeDeleteModal()
+                      if (!target) return
+                      setModalUserAction(target)
+                      setModalReason('')
+                      setModalError('')
+                    }}
+                  >
+                    Inactivar en su lugar
+                  </button>
+                )
+              ) : (
+                <button className="secondary-btn danger" onClick={handleConfirmDelete} disabled={confirmDeleteModal.kind !== 'cell' && !deleteReason.trim()}>
+                  Confirmar eliminación
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -47,7 +47,10 @@ CREATE TABLE pago (
     id_pago SERIAL PRIMARY KEY,
     placa VARCHAR(10) NOT NULL REFERENCES vehiculo(placa),
     fecha_pago DATE NOT NULL,
-    monto NUMERIC(10, 2) NOT NULL CHECK (monto >= 0)
+    monto NUMERIC(10, 2) NOT NULL CHECK (monto >= 0),
+    -- 'Registro': pago inicial automatico al registrar el vehiculo en Gestion de Usuarios.
+    -- No cuenta como movimiento para HU-U08 (eliminar registros hechos por error).
+    origen VARCHAR(20) NOT NULL DEFAULT 'Caja' CHECK (origen IN ('Caja', 'Registro'))
 );
 
 -- Tabla Espacio (celda). RN-01: cada celda es solo para carro o solo para moto.
@@ -98,6 +101,21 @@ CREATE TABLE IF NOT EXISTS auditoria_usuario (
     motivo VARCHAR(255),
     usuario_responsable VARCHAR(100) NOT NULL,
     fecha_cambio TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- HU-U08: constancia de cada eliminacion. No depende de propietario ni de vehiculo
+-- para que sobreviva al borrado y conserve quien elimino, cuando, por que y que se elimino.
+CREATE TABLE IF NOT EXISTS registro_eliminacion (
+    id SERIAL PRIMARY KEY,
+    tipo_registro VARCHAR(20) NOT NULL CHECK (tipo_registro IN ('Usuario', 'Vehiculo')),
+    id_propietario INT,
+    documento VARCHAR(20),
+    nombre VARCHAR(200),
+    placas VARCHAR(255),
+    detalle TEXT,
+    motivo VARCHAR(255) NOT NULL,
+    usuario_responsable VARCHAR(100) NOT NULL,
+    fecha_eliminacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS historial_celda (

@@ -63,7 +63,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 const post = <T,>(path: string, data: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(data) })
 const put = <T,>(path: string, data: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(data) })
 const patch = <T,>(path: string, data: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(data) })
-const del = <T,>(path: string) => request<T>(path, { method: 'DELETE' })
+const del = <T,>(path: string, data?: unknown) =>
+  request<T>(path, data === undefined ? { method: 'DELETE' } : { method: 'DELETE', body: JSON.stringify(data) })
 
 export async function login(correo: string, contrasena: string): Promise<User> {
   const form = new URLSearchParams({ username: correo, password: contrasena })
@@ -237,11 +238,13 @@ export const toggleModule2VehicleStatus = (
   data: { estado?: UserStatus; motivo: string },
 ) => patch<UserRecord>(`/api/vehiculos/${encodeURIComponent(placa)}/estado`, data)
 
-export const deleteModule2Vehicle = (placa: string) =>
-  del<UserRecord>(`/api/vehiculos/${encodeURIComponent(placa)}`)
+// HU-U08: solo administrador, con motivo obligatorio; se rechaza si el vehículo tiene movimientos.
+export const deleteModule2Vehicle = (placa: string, motivo: string) =>
+  del<UserRecord>(`/api/vehiculos/${encodeURIComponent(placa)}`, { motivo })
 
-export const deleteModule2User = (userId: number) =>
-  del<{ id: number; eliminado: boolean; detalle: string }>(`/api/usuarios/${userId}`)
+// HU-U08: solo administrador, con motivo obligatorio; se rechaza si sus vehículos tienen movimientos.
+export const deleteModule2User = (userId: number, motivo: string) =>
+  del<{ id: number; detail: string }>(`/api/usuarios/${userId}`, { motivo })
 
 export const getModule2Cells = () => request<CellRecord[]>('/api/celdas')
 
