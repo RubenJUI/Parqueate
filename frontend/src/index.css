@@ -2812,3 +2812,23 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
     margin-top: .2em;
   }
 }
+
+/* Íconos de tipo de vehículo: siempre junto al texto, alineados y con el color del texto. */
+.type-line { display: inline-flex !important; align-items: center; gap: 5px; }
+.type-line .icon { color: var(--muted); flex: none; }
+.vehicle-badge .icon { color: #CBD5E1; flex: none; }
+.pills-inline button, .filter-pill { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.filter-pill .icon { opacity: .75; }
+.filter-pill.active .icon { opacity: 1; }
+.cell-group h3 { display: flex; align-items: center; gap: 8px; }
+.cell-group h3 .icon { color: var(--muted); }
+.hud-pill > .icon { flex: none; color: #475569; }
+
+/* Íconos de línea en pestañas, menú de acciones y botones (antes eran emojis). */
+.module-subnav button { display: inline-flex; align-items: center; gap: 7px; }
+.module-subnav button .icon { flex: none; opacity: .7; }
+.module-subnav button.active .icon { opacity: 1; }
+.actions-dropdown-item .icon { flex: none; color: #64748B; }
+.actions-dropdown-item.danger .icon { color: currentColor; }
+.secondary-btn.danger { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.hud-maint-badge { display: inline-flex; align-items: center; gap: 3px; }

@@ -51,6 +51,18 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     alert: <><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4M12 17h.01" /></>,
     x: <path d="M18 6 6 18M6 6l12 12" />,
     car: <><path d="m3 11 2-5h14l2 5" /><path d="M5 11h14a2 2 0 0 1 2 2v4H3v-4a2 2 0 0 1 2-2ZM5 17v2M19 17v2" /><circle cx="7" cy="14" r="1" /><circle cx="17" cy="14" r="1" /></>,
+    // Moto de perfil: dos ruedas, chasis, manubrio y asiento. Se distingue del carro por la silueta.
+    moto: <><circle cx="5" cy="16" r="3" /><circle cx="19" cy="16" r="3" /><path d="m5 16 4-5h5l2 3" /><path d="M19 16 16 7h2.5" /><path d="M9 11 8 9H5.5" /><path d="M14 11h2.7" /></>,
+    // Personas: módulo de usuarios. El carro queda reservado para el tipo de vehículo (un ícono, un significado).
+    users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
+    // Íconos de acciones y pestañas (reemplazan emojis para mantener un solo estilo visual).
+    edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></>,
+    plus: <path d="M12 5v14M5 12h14" />,
+    history: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l4 2" /></>,
+    ban: <><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></>,
+    checkCircle: <><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></>,
+    trash: <><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6" /></>,
+    map: <><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z" /><path d="M9 4v14M15 6v14" /></>,
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
     // Tarjeta de pago: módulo de pagos y mensualidades.
     card: <><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M2 10h20M6 15h4" /></>,
@@ -58,6 +70,12 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     settings: <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></>,
   }
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{paths[name]}</svg>
+}
+
+// Ícono del tipo de vehículo. Siempre acompaña al texto "Carro"/"Moto" (refuerzo visual, no reemplazo),
+// así el significado no depende solo del dibujo y los lectores de pantalla leen el texto.
+function VehicleIcon({ tipo, size = 16 }: { tipo: string; size?: number }) {
+  return <Icon name={tipo === 'Moto' ? 'moto' : 'car'} size={size} />
 }
 
 function Button({ children, variant = 'primary', icon, onClick, type = 'button', disabled = false, className = '' }: { children: ReactNode; variant?: 'primary' | 'secondary' | 'ghost' | 'danger'; icon?: string; onClick?: () => void; type?: 'button' | 'submit'; disabled?: boolean; className?: string }) {
@@ -273,7 +291,7 @@ function Operations({
         <span className="dock-divider" />
         <div className="dock-navigation">
           <button aria-label="Operaciones" className={`dock-item ${opTab === 'console' || opTab === 'inside' || opTab === 'history' ? 'active' : ''}`} onClick={() => setOpTab('console')}><Icon name="grid" size={18} /><span>Operaciones</span></button>
-          <button aria-label="Usuarios y celdas" className={`dock-item ${opTab === 'users' ? 'active' : ''}`} onClick={() => setOpTab('users')}><Icon name="car" size={18} /><span>Usuarios y celdas</span></button>
+          <button aria-label="Usuarios y celdas" className={`dock-item ${opTab === 'users' ? 'active' : ''}`} onClick={() => setOpTab('users')}><Icon name="users" size={18} /><span>Usuarios y celdas</span></button>
           <button aria-label="Pagos" className={`dock-item ${opTab === 'payments' ? 'active' : ''}`} onClick={() => setOpTab('payments')}><Icon name="card" size={18} /><span>Pagos</span></button>
           <button aria-label="Configuración" className={`dock-item ${opTab === 'config' ? 'active' : ''}`} onClick={() => setOpTab('config')}><Icon name="settings" size={18} /><span>Configuración</span></button>
         </div>
@@ -382,9 +400,11 @@ function OperationsHeader({
             type="button"
             className={`hud-pill ${isFull ? 'hud-full' : ''}`}
             title={tooltip}
+            aria-label={`${label}: ${tooltip}`}
             onClick={() => onSelectVehicleType(tipo)}
           >
             <i className={`hud-light ${lightTone}`} />
+            <VehicleIcon tipo={tipo} size={15} />
             <span>{label}:</span>
             {total > 0 ? (
               <strong>
@@ -396,7 +416,7 @@ function OperationsHeader({
               </strong>
             )}
             {fueraDeServicio > 0 && (
-              <span className="hud-maint-badge">· ⚠️ {fueraDeServicio} fuera de servicio</span>
+              <span className="hud-maint-badge">· <Icon name="alert" size={12} /> {fueraDeServicio} fuera de servicio</span>
             )}
           </button>
         )
@@ -439,10 +459,13 @@ function OperationsHeader({
 // Motivo por el que la consulta de la placa ya permite saber que el movimiento no procede.
 // La API valida de nuevo al registrar, así que esto solo adelanta el aviso al operario.
 function blockReasonFor(mode: 'entry' | 'exit', vehicle: VehicleLookup) {
-  if (mode === 'exit') return vehicle.id_tiquete_abierto ? '' : 'El vehículo no tiene entrada registrada (RF-09).'
-  if (vehicle.id_tiquete_abierto) return `El vehículo ya se encuentra dentro del parqueadero en la celda ${vehicle.numero_espacio} (RN-03).`
+  if (mode === 'exit') return vehicle.id_tiquete_abierto ? '' : 'El vehículo no tiene entrada registrada.'
+  if (vehicle.id_tiquete_abierto) return `El vehículo ya se encuentra dentro del parqueadero en la celda ${vehicle.numero_espacio}.`
+  const conMotivo = (motivo: string | null) => (motivo ? ` (motivo: ${motivo})` : '')
+  if (vehicle.estado_usuario === 'Inactivo') return `El usuario ${vehicle.propietario} está inactivo${conMotivo(vehicle.motivo_inactivacion_usuario)}. No puede registrar entrada; avise al administrador.`
+  if (vehicle.estado_vehiculo === 'Inactivo') return `El vehículo ${vehicle.placa} está inactivo${conMotivo(vehicle.motivo_inactivacion_vehiculo)}. No puede registrar entrada; avise al administrador.`
   if (!vehicle.mensualidad) return 'El vehículo no tiene una mensualidad registrada.'
-  if (vehicle.mensualidad.estado === 'Vencida') return `Mensualidad vencida el ${formatDate(vehicle.mensualidad.fecha_vencimiento)} (RN-05).`
+  if (vehicle.mensualidad.estado === 'Vencida') return `Mensualidad vencida el ${formatDate(vehicle.mensualidad.fecha_vencimiento)}.`
   return ''
 }
 
@@ -534,9 +557,9 @@ function Console({ cells: moduleCells, onChanged }: { cells: CellRecord[]; onCha
         {result.alert && <div className="notice notice-amber"><Icon name="alert" size={17} /><span><strong>{result.alert}</strong> · Recuérdale renovar para evitar que se le niegue la entrada.</span></div>}
       </div> : !knownPlate ? <div className="validation-empty"><div className="scan-icon"><Icon name="car" size={26} /></div><h3>Esperando una placa</h3><p>La validación del usuario y la mensualidad aparecerá aquí.</p></div> :
         loading ? <div className="validation-empty"><h3>Validando placa…</h3></div> :
-        lookupError ? <div className="blocked standalone"><Icon name="x" size={18} /><div><strong>{lookupError.includes('no está asociado') ? 'Placa no registrada' : 'No se pudo validar la placa'}</strong><p>{lookupError}{lookupError.includes('no está asociado') ? ' (RF-02).' : ''}</p></div></div> :
+        lookupError ? <div className="blocked standalone"><Icon name="x" size={18} /><div><strong>{lookupError.includes('no está asociado') ? 'Placa no registrada' : 'No se pudo validar la placa'}</strong><p>{lookupError}</p></div></div> :
         vehicle && <div className={`validation-card ${blockReason ? 'invalid' : ''}`}>
-          <div className="validation-top"><div className="person"><div className="avatar avatar-light">{initials(vehicle.propietario)}</div><div><strong>{vehicle.propietario}</strong><span>{vehicle.tipo_vehiculo} · {vehicle.placa}</span></div></div><StatusBadge status={vehicle.mensualidad?.estado ?? 'Sin mensualidad'} /></div>
+          <div className="validation-top"><div className="person"><div className="avatar avatar-light">{initials(vehicle.propietario)}</div><div><strong>{vehicle.propietario}</strong><span className="type-line"><VehicleIcon tipo={vehicle.tipo_vehiculo} size={13} />{vehicle.tipo_vehiculo} · {vehicle.placa}</span></div></div><StatusBadge status={vehicle.mensualidad?.estado ?? 'Sin mensualidad'} /></div>
           {notice && <div className={`notice ${notice.tone}`}><Icon name="alert" size={17} /><span><strong>{notice.text}</strong>{notice.tone === 'notice-amber' ? ' · Renueva para evitar interrupciones.' : ' · Debe registrar un pago antes de ingresar.'}</span></div>}
           {blockReason ? <div className="blocked"><Icon name="x" size={18} /><div><strong>Movimiento no permitido</strong><p>{blockReason}</p></div></div> :
             mode === 'entry' ? <div className="cell-selector"><Field label="Celda"><select value={selectedCell} onChange={e => setSelectedCell(e.target.value)}><option value="">Asignación automática{cells[0] ? ` (${cells[0].numero_espacio})` : ''}</option>{cells.map(c => <option key={c.id_espacio} value={c.id_espacio}>{c.numero_espacio}</option>)}</select></Field><span className="auto-tag"><Icon name={cells.length ? 'check' : 'alert'} size={14} /> {cells.length ? `${cells.length} celdas libres de ${vehicle.tipo_vehiculo.toLowerCase()}` : `Sin celdas libres de ${vehicle.tipo_vehiculo.toLowerCase()}`}</span></div> :
@@ -978,7 +1001,7 @@ function UsersModule({
         </div>
         <div className="filter-stack">
           <div className="filter-group"><span>Estado</span><div className="filter-pills">{(['Todos', 'Activos', 'Inactivos'] as const).map((option) => <button key={option} type="button" className={`filter-pill ${estadoFilter === option ? 'active' : ''}`} onClick={() => setEstadoFilter(option)}>{option}</button>)}</div></div>
-          <div className="filter-group"><span>Vehículo</span><div className="filter-pills">{(['Todos', 'Carros', 'Motos'] as const).map((option) => <button key={option} type="button" className={`filter-pill ${vehiculoFilter === option ? 'active' : ''}`} onClick={() => setVehiculoFilter(option)}>{option}</button>)}</div></div>
+          <div className="filter-group"><span>Vehículo</span><div className="filter-pills">{(['Todos', 'Carros', 'Motos'] as const).map((option) => <button key={option} type="button" className={`filter-pill ${vehiculoFilter === option ? 'active' : ''}`} onClick={() => setVehiculoFilter(option)}>{option !== 'Todos' && <VehicleIcon tipo={option === 'Carros' ? 'Carro' : 'Moto'} size={14} />}{option}</button>)}</div></div>
         </div>
       </div>
       {registerSuccess && <div className="notice notice-green"><Icon name="check" size={16} /><span>{registerSuccess}</span></div>}
@@ -1029,7 +1052,7 @@ function UsersModule({
                           const openEntry = findOpenEntryForPlate(vehicle.placa)
                           return (
                             <div key={vehicle.id} className="vehicle-badge-wrap">
-                              <span className="vehicle-badge"><strong>{vehicle.placa}</strong><small>{vehicle.tipo}</small></span>
+                              <span className="vehicle-badge"><VehicleIcon tipo={vehicle.tipo} size={14} /><strong>{vehicle.placa}</strong><small>{vehicle.tipo}</small></span>
                               <span className="vehicle-meta">{vehicle.marca} · {vehicle.color}</span>
                               <span className={`mini-badge ${vehicle.estado === 'Activo' ? 'success' : 'muted'}`}>{vehicle.estado}</span>
                               {isAdmin && (
@@ -1091,7 +1114,7 @@ function UsersModule({
                                 setOpenActionsUserId(null)
                               }}
                             >
-                              ✏️ Editar datos
+                              <Icon name="edit" size={15} />Editar datos
                             </button>
                             <button
                               type="button"
@@ -1103,7 +1126,7 @@ function UsersModule({
                                 setOpenActionsUserId(null)
                               }}
                             >
-                              ➕ Agregar vehículo
+                              <Icon name="plus" size={15} />Agregar vehículo
                             </button>
                             <button
                               type="button"
@@ -1113,7 +1136,7 @@ function UsersModule({
                                 setOpenActionsUserId(null)
                               }}
                             >
-                              📋 Ver historial ({u.auditLogs.length})
+                              <Icon name="history" size={15} />Ver historial ({u.auditLogs.length})
                             </button>
                             {isAdmin && (
                               <button
@@ -1126,7 +1149,7 @@ function UsersModule({
                                   setOpenActionsUserId(null)
                                 }}
                               >
-                                {u.estado === 'Activo' ? '🚫 Inactivar usuario' : '✅ Reactivar usuario'}
+                                {u.estado === 'Activo' ? <><Icon name="ban" size={15} />Inactivar usuario</> : <><Icon name="checkCircle" size={15} />Reactivar usuario</>}
                               </button>
                             )}
                             {isAdmin && !hasVehicleInside && (
@@ -1146,7 +1169,7 @@ function UsersModule({
                                     })
                                   }}
                                 >
-                                  🗑️ Eliminar usuario
+                                  <Icon name="trash" size={15} />Eliminar usuario
                                 </button>
                               </>
                             )}
@@ -1180,7 +1203,7 @@ function UsersModule({
             <div className="field"><label>Correo electrónico</label><input value={registerForm.correo} onChange={(e) => setRegisterForm((prev) => ({ ...prev, correo: e.target.value }))} placeholder="correo@ejemplo.com" /></div>
           </div>
           <div className="form-column">
-            <div className="field"><label>Tipo de vehículo</label><div className="segmented pills-inline"><button type="button" className={registerForm.tipo === 'Carro' ? 'active' : ''} onClick={() => setRegisterForm((prev) => ({ ...prev, tipo: 'Carro' }))}>Carro</button><button type="button" className={registerForm.tipo === 'Moto' ? 'active' : ''} onClick={() => setRegisterForm((prev) => ({ ...prev, tipo: 'Moto' }))}>Moto</button></div></div>
+            <div className="field"><label>Tipo de vehículo</label><div className="segmented pills-inline"><button type="button" className={registerForm.tipo === 'Carro' ? 'active' : ''} onClick={() => setRegisterForm((prev) => ({ ...prev, tipo: 'Carro' }))}><VehicleIcon tipo="Carro" />Carro</button><button type="button" className={registerForm.tipo === 'Moto' ? 'active' : ''} onClick={() => setRegisterForm((prev) => ({ ...prev, tipo: 'Moto' }))}><VehicleIcon tipo="Moto" />Moto</button></div></div>
             <div className="field">
               <label>Placa (única e ineditable)</label>
               <input value={registerForm.placa} maxLength={6} onChange={(e) => setRegisterForm((prev) => ({ ...prev, placa: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') }))} placeholder={registerForm.tipo === 'Carro' ? 'ABC123' : 'ABC12D'} />
@@ -1267,6 +1290,7 @@ function UsersModule({
             <div className="filter-pills">
               {(['Todas', 'Carros', 'Motos'] as const).map((option) => (
                 <button key={option} type="button" className={`filter-pill ${cellTypeFilter === option ? 'active' : ''}`} onClick={() => setCellTypeFilter(option)}>
+                  {option !== 'Todas' && <VehicleIcon tipo={option === 'Carros' ? 'Carro' : 'Moto'} size={14} />}
                   {option === 'Todas' ? `Todas (${cells.length})` : option === 'Carros' ? `Carros (${carTotal})` : `Motos (${motoTotal})`}
                 </button>
               ))}
@@ -1287,7 +1311,7 @@ function UsersModule({
         <div className="cell-layout">
           {carCells.length > 0 && (
             <div className="cell-group">
-              <h3>CARROS / {firstCarCode} — {lastCarCode} ({carCells.length})</h3>
+              <h3><VehicleIcon tipo="Carro" />CARROS / {firstCarCode} — {lastCarCode} ({carCells.length})</h3>
               <div className="cell-grid">
                 {carCells.map((cell) => (
                   <button
@@ -1317,7 +1341,7 @@ function UsersModule({
 
           {motoCells.length > 0 && (
             <div className="cell-group">
-              <h3>MOTOS / {firstMotoCode} — {lastMotoCode} ({motoCells.length})</h3>
+              <h3><VehicleIcon tipo="Moto" />MOTOS / {firstMotoCode} — {lastMotoCode} ({motoCells.length})</h3>
               <div className="cell-grid small-grid">
                 {motoCells.map((cell) => (
                   <button
@@ -1401,7 +1425,7 @@ function UsersModule({
                       })
                     }}
                   >
-                    🗑️ Eliminar celda
+                    <Icon name="trash" size={15} />Eliminar celda
                   </button>
                 </div>
               </>
@@ -1459,9 +1483,9 @@ function UsersModule({
   return (
     <section className="module-shell module-users">
       <div className="module-subnav" role="tablist" aria-label="Sub-vistas del módulo 2">
-        <button type="button" className={subView === 'directory' ? 'active' : ''} onClick={() => setSubView('directory')}>👥 Directorio de Usuarios {userCount > 0 && <span>{userCount}</span>}</button>
-        <button type="button" className={subView === 'map' ? 'active' : ''} onClick={() => setSubView('map')}>🗺️ Mapa de Celdas ({cells.length})</button>
-        <button type="button" className={subView === 'register' ? 'active' : ''} onClick={() => setSubView('register')}>➕ Registrar Usuario y Vehículo</button>
+        <button type="button" className={subView === 'directory' ? 'active' : ''} onClick={() => setSubView('directory')}><Icon name="users" size={16} />Directorio de Usuarios {userCount > 0 && <span>{userCount}</span>}</button>
+        <button type="button" className={subView === 'map' ? 'active' : ''} onClick={() => setSubView('map')}><Icon name="map" size={16} />Mapa de Celdas ({cells.length})</button>
+        <button type="button" className={subView === 'register' ? 'active' : ''} onClick={() => setSubView('register')}><Icon name="plus" size={16} />Registrar Usuario y Vehículo</button>
       </div>
 
       <div className="module-card">
@@ -1570,8 +1594,8 @@ function UsersModule({
               <div className="field">
                 <label>Tipo de vehículo</label>
                 <div className="segmented pills-inline">
-                  <button type="button" className={vehicleModalForm.tipo === 'Carro' ? 'active' : ''} onClick={() => { setVehicleModalForm((prev) => ({ ...prev, tipo: 'Carro' })); setModalError('') }}>Carro</button>
-                  <button type="button" className={vehicleModalForm.tipo === 'Moto' ? 'active' : ''} onClick={() => { setVehicleModalForm((prev) => ({ ...prev, tipo: 'Moto' })); setModalError('') }}>Moto</button>
+                  <button type="button" className={vehicleModalForm.tipo === 'Carro' ? 'active' : ''} onClick={() => { setVehicleModalForm((prev) => ({ ...prev, tipo: 'Carro' })); setModalError('') }}><VehicleIcon tipo="Carro" />Carro</button>
+                  <button type="button" className={vehicleModalForm.tipo === 'Moto' ? 'active' : ''} onClick={() => { setVehicleModalForm((prev) => ({ ...prev, tipo: 'Moto' })); setModalError('') }}><VehicleIcon tipo="Moto" />Moto</button>
                 </div>
               </div>
               <div className="field">
@@ -1930,5 +1954,5 @@ function AnnulModal({ ticket, onClose, onDone }: { ticket: Ticket; onClose: () =
       setSending(false)
     }
   }
-  return <Modal title={`Anular ${ticketCode(ticket.id_tiquete)}`} subtitle="Esta acción no elimina el movimiento y quedará en la trazabilidad." onClose={onClose}><div className="modal-body"><div className="notice notice-red"><Icon name="alert" size={18} /><span>La anulación requiere una justificación obligatoria (RNF-05).{ticket.estado === 'Activo' ? ` La celda ${ticket.numero_espacio} quedará libre.` : ''}</span></div><Field label="Justificación"><textarea value={reason} onChange={e => setReason(e.target.value)} rows={4} maxLength={255} placeholder="Explica el motivo de la anulación..." autoFocus /></Field>{error && <div className="notice notice-red"><Icon name="alert" size={16} /><span>{error}</span></div>}</div><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button variant="danger" onClick={confirm} disabled={sending || reason.trim().length < 8}>{sending ? 'Anulando…' : 'Anular registro'}</Button></div></Modal>
+  return <Modal title={`Anular ${ticketCode(ticket.id_tiquete)}`} subtitle="Esta acción no elimina el movimiento y quedará en la trazabilidad." onClose={onClose}><div className="modal-body"><div className="notice notice-red"><Icon name="alert" size={18} /><span>La anulación requiere una justificación obligatoria.{ticket.estado === 'Activo' ? ` La celda ${ticket.numero_espacio} quedará libre.` : ''}</span></div><Field label="Justificación"><textarea value={reason} onChange={e => setReason(e.target.value)} rows={4} maxLength={255} placeholder="Explica el motivo de la anulación..." autoFocus /></Field>{error && <div className="notice notice-red"><Icon name="alert" size={16} /><span>{error}</span></div>}</div><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button variant="danger" onClick={confirm} disabled={sending || reason.trim().length < 8}>{sending ? 'Anulando…' : 'Anular registro'}</Button></div></Modal>
 }
