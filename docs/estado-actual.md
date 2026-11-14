@@ -33,12 +33,13 @@ El MVP 1 corresponde a la **Iteración 1: Gestión de la entrada y salida de veh
 
 ## Pruebas
 
-`backend/tests/` tiene 49 pruebas automáticas que se ejecutan contra una base de pruebas aparte (ver [backend/README.md](../backend/README.md#pruebas)):
+`backend/tests/` tiene 63 pruebas automáticas que se ejecutan contra una base de pruebas aparte (ver [backend/README.md](../backend/README.md#pruebas)):
 
 - los 7 casos de uso del documento de requerimientos;
 - los ejemplos de vigencia del documento, incluido el caso de febrero;
 - las reglas RN-01 y RF-04 a RF-13, autenticación, anulación y ausencia de borrados;
-- la herramienta de registro: cupo garantizado, Habeas Data, renovaciones y validaciones.
+- la herramienta de registro: cupo garantizado, Habeas Data, renovaciones y validaciones;
+- la conversión de celdas (carro a 2 motos y pareja de motos a carro) y su restablecimiento.
 
 Resultado al cierre del MVP 1: **30 de 30 pruebas aprobadas**. La relación entre cada requisito y su prueba está en [reglas-de-negocio.md](./reglas-de-negocio.md#trazabilidad).
 

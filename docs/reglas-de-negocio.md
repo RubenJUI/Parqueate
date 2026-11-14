@@ -38,6 +38,22 @@ El requerimiento indica qué debe existir antes de usar el módulo, pero no cóm
 - **Anulación:** solo el administrador, con un motivo de al menos 8 caracteres en pantalla. Se guarda quién anuló y cuándo; si el vehículo estaba dentro, se libera la celda.
 - **Habeas Data (RNF-10):** un propietario solo se registra si autorizó el tratamiento de sus datos; se guarda la autorización y su fecha.
 
+## HU-C01 · Ver el mapa de celdas
+
+**Como:** Administrador u operario del parqueadero. **Requiero:** ver el mapa de celdas con el estado de cada una (libre, ocupada o fuera de servicio). **Para:** saber en todo momento qué espacios hay disponibles y dónde está cada vehículo.
+
+**Criterios de aceptación**
+
+1. El sistema inicia con 80 celdas en estado Libre: C-01 a C-70 y M-01 a M-10.
+2. El mapa se divide en dos secciones, Carros y Motos. Cada celda aparece en la sección de su tipo actual.
+3. El mapa se puede filtrar por tipo y por estado.
+4. En las celdas ocupadas se muestran la placa y la hora de entrada.
+5. Las celdas que resultan de una conversión aparecen juntas en un recuadro que indica el espacio de donde salieron.
+   - Ejemplo: M-11 y M-12 aparecen en la sección de Motos, en un recuadro marcado "Antes C-20".
+   - Ejemplo: C-72 aparece en la sección de Carros, en un recuadro marcado "Antes M-09/M-10".
+6. Cada estado se identifica con color y con texto. Las celdas convertidas se distinguen con un recuadro de otro color, sin confundirse con fuera de servicio.
+7. El mapa carga en menos de 2 segundos.
+
 ## HU-U08 · Eliminar usuario o vehículo registrado por error
 
 **Como:** Administrador del parqueadero. **Requiero:** eliminar un usuario o vehículo que no tiene ningún movimiento. **Para:** corregir registros hechos por error.
@@ -101,6 +117,10 @@ Las fechas del documento se reproducen relativas al día de la prueba: "pago del
 | RNF-02 Máximo 3 pasos | Placa, celda (automática) y novedad opcional en una sola pantalla | Prueba manual |
 | RNF-03 Autenticación y roles | JWT; solo el administrador anula, administra celdas (inicializar, crear, cambiar, eliminar), cambia el estado de usuarios y vehículos y los elimina. El selector de vista del dock solo lo ve el administrador | `test_rnf03_requiere_autenticacion`, `test_rnf03_operario_no_administra_…` (6 rutas), `test_rnf03_administrador_inicializa_…`, `test_rnf05_solo_el_administrador_…` |
 | HU-U07 / HU-U09 Inactivo no entra | La entrada se rechaza (`409`) si el usuario o el vehículo están inactivos, con el motivo; la pantalla de registro lo bloquea al consultar la placa. Al reactivar, puede entrar | `test_hu_u07_…` (2 pruebas), `test_hu_u09_al_reactivar_…` |
+| HU-C01 Celdas convertidas en su espacio | `GET /api/celdas` devuelve `espacio_original` y `tipo_original`; cada celda aparece en la sección de su tipo actual; las resultantes van en un recuadro que indica su espacio original ("Antes C-20" con M-11 y M-12 entre las motos; "Antes M-09/M-10" con C-72 entre los carros) | `test_hu_c05_convierte_…`, `test_hu_c06_convierte_…` |
+| HU-C05 Carro a 2 motos | `POST /api/celdas/{codigo}/convertir`: celda libre, cupo garantizado, siguientes códigos de moto, historial "M-11 y M-12, antes C-20" | `test_hu_c05_…` (5 pruebas) |
+| HU-C06 Pareja de motos a carro | Mismo endpoint sobre una moto original: solo parejas fijas (M-01/M-02 … M-09/M-10), ambas libres, cupo; historial "C-71, antes M-05 y M-06" | `test_hu_c06_…` (3 pruebas) |
+| HU-C07 Restablecer | `POST /api/celdas/{codigo}/restablecer` desde cualquier celda resultante: todas libres, cupo; el espacio original vuelve y las resultantes quedan `Retirada`, por lo que sus códigos no se reutilizan. Una celda resultante no se vuelve a convertir. El tipo ya no se cambia con `PATCH` | `test_hu_c07_…` (3 pruebas), `test_el_tipo_no_se_cambia_directamente` |
 | HU-U08 Eliminar registros hechos por error | Solo administrador y con motivo; se rechaza si hay entradas, salidas (aun anuladas) o pagos de caja, sugiriendo inactivar. El pago automático del registro (`pago.origen = 'Registro'`) no cuenta. La constancia queda en `registro_eliminacion`, que sobrevive al borrado | `tests/test_eliminacion.py` (7 pruebas) |
 | RNF-04 Concurrencia | `FOR UPDATE SKIP LOCKED` e índices únicos parciales | Índices verificados por `test_cu4_…` |
 | RNF-05 Trazabilidad sin borrados | Operario y hora en cada registro; anulación con motivo; sin DELETE | `test_rnf05_…` (2 pruebas) |
