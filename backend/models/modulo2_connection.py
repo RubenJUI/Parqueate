@@ -821,7 +821,8 @@ class Modulo2UsuarioConnection:
             partes.append(f"{n} {'registro' if n == 1 else 'registros'} de entrada/salida")
         if movimientos["pagos"]:
             n = movimientos["pagos"]
-            partes.append(f"{n} {'pago' if n == 1 else 'pagos'}")
+            # Un registro en `pago` es dinero ya recibido en caja; no existen pagos pendientes.
+            partes.append(f"{n} {'pago de mensualidad recibido' if n == 1 else 'pagos de mensualidad recibidos'}")
         return " y ".join(partes)
 
     @staticmethod

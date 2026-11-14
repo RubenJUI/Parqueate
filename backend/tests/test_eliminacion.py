@@ -2,8 +2,11 @@
 
 Criterios:
 - Solo el administrador puede eliminar (cubierto en test_reglas.py).
-- Solo se elimina si no tiene entradas, salidas, novedades ni pagos; si los tiene, se rechaza,
-  se informa el motivo, se sugiere inactivar y el historial se conserva completo.
+- Solo se elimina si no tiene entradas, salidas, novedades ni pagos recibidos en caja; el pago
+  inicial que el sistema genera al registrar el vehículo no cuenta como movimiento.
+- Si tiene movimientos, se rechaza, se informa cuáles tiene, se sugiere inactivar y el historial
+  se conserva completo.
+- Al eliminar un usuario se eliminan sus vehículos, siempre que ninguno tenga movimientos.
 - Se exige el motivo y queda registrado quién eliminó, cuándo y por qué.
 """
 
@@ -126,7 +129,7 @@ def test_hu_u08_rechaza_si_tiene_pagos_en_caja(client, admin, registrar_usuario,
 
     assert response.status_code == 409
     assert response.json()["detail"] == (
-        "No se puede eliminar el usuario porque sus vehículos tienen 1 pago. "
+        "No se puede eliminar el usuario porque sus vehículos tienen 1 pago de mensualidad recibido. "
         "Su historial se conserva: inactívelo en su lugar."
     )
     assert contar(db, "SELECT COUNT(*) FROM pago WHERE placa = 'ABC123'") == 2

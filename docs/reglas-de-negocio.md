@@ -38,6 +38,26 @@ El requerimiento indica qué debe existir antes de usar el módulo, pero no cóm
 - **Anulación:** solo el administrador, con un motivo de al menos 8 caracteres en pantalla. Se guarda quién anuló y cuándo; si el vehículo estaba dentro, se libera la celda.
 - **Habeas Data (RNF-10):** un propietario solo se registra si autorizó el tratamiento de sus datos; se guarda la autorización y su fecha.
 
+## HU-U08 · Eliminar usuario o vehículo registrado por error
+
+**Como:** Administrador del parqueadero. **Requiero:** eliminar un usuario o vehículo que no tiene ningún movimiento. **Para:** corregir registros hechos por error.
+
+**Criterios de aceptación**
+
+1. **Vehículo:** se puede eliminar si no tiene entradas, salidas, novedades ni pagos recibidos en caja.
+2. **Usuario:** se puede eliminar si ninguno de sus vehículos tiene entradas, salidas, novedades ni pagos recibidos en caja. Al eliminarlo se eliminan también todos sus vehículos.
+3. Si el vehículo tiene movimientos, o si alguno de los vehículos del usuario los tiene, el sistema no elimina nada.
+   - Le informa al administrador qué movimientos encontró. Ejemplo: 2 registros de entrada/salida y 1 pago de mensualidad recibido.
+   - Le ofrece inactivarlo en lugar de eliminarlo.
+   - Al inactivarlo, el registro y todo su historial se conservan. No puede volver a entrar al parqueadero hasta que se reactive.
+4. Un vehículo sin movimientos se puede eliminar solo, sin eliminar al usuario. Esto aplica aunque otro vehículo del mismo usuario sí tenga movimientos.
+5. El pago que el sistema genera automáticamente al registrar el vehículo no cuenta como movimiento, porque no es un cobro real en caja.
+6. Se exige el motivo y queda registrado quién eliminó, cuándo y por qué.
+
+> **Inactivar no genera deudas:** solo impide la entrada y conserva el historial con el motivo; el sistema no calcula saldos pendientes.
+>
+> **Qué es un pago:** cada registro de la tabla `pago` es dinero ya recibido; el sistema no maneja pagos pendientes. Los pagos de `datos_prueba.sql` simulan mensualidades cobradas en caja, por eso esos usuarios solo se pueden inactivar.
+
 ## Trazabilidad
 
 Requisito, dónde se implementa y prueba automática que lo verifica (`backend/tests/`).
@@ -80,6 +100,7 @@ Las fechas del documento se reproducen relativas al día de la prueba: "pago del
 | RN-05 Vencida no entra | Validación de la entrada | `test_cu2_…` |
 | RNF-02 Máximo 3 pasos | Placa, celda (automática) y novedad opcional en una sola pantalla | Prueba manual |
 | RNF-03 Autenticación y roles | JWT; solo el administrador anula, administra celdas (inicializar, crear, cambiar, eliminar), cambia el estado de usuarios y vehículos y los elimina. El selector de vista del dock solo lo ve el administrador | `test_rnf03_requiere_autenticacion`, `test_rnf03_operario_no_administra_…` (6 rutas), `test_rnf03_administrador_inicializa_…`, `test_rnf05_solo_el_administrador_…` |
+| HU-U07 / HU-U09 Inactivo no entra | La entrada se rechaza (`409`) si el usuario o el vehículo están inactivos, con el motivo; la pantalla de registro lo bloquea al consultar la placa. Al reactivar, puede entrar | `test_hu_u07_…` (2 pruebas), `test_hu_u09_al_reactivar_…` |
 | HU-U08 Eliminar registros hechos por error | Solo administrador y con motivo; se rechaza si hay entradas, salidas (aun anuladas) o pagos de caja, sugiriendo inactivar. El pago automático del registro (`pago.origen = 'Registro'`) no cuenta. La constancia queda en `registro_eliminacion`, que sobrevive al borrado | `tests/test_eliminacion.py` (7 pruebas) |
 | RNF-04 Concurrencia | `FOR UPDATE SKIP LOCKED` e índices únicos parciales | Índices verificados por `test_cu4_…` |
 | RNF-05 Trazabilidad sin borrados | Operario y hora en cada registro; anulación con motivo; sin DELETE | `test_rnf05_…` (2 pruebas) |
