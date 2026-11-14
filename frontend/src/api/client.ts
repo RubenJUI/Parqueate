@@ -149,6 +149,12 @@ export type CellRecord = {
   hora: string | null
   motivo: string | null
   historial: Array<{ id: number; momento: string; usuario: string; accion: string; motivo: string }>
+  // Celdas resultantes de una conversión: espacio original donde están (p. ej. "C-20" o "M-05 y M-06").
+  id_conversion?: number | null
+  espacio_original?: string | null
+  tipo_original?: VehicleType | null
+  // Moto original: código de su pareja fija (M-05 -> M-06); null si no puede convertirse a carro.
+  pareja?: string | null
 }
 
 export type UserModuleVehicle = {
@@ -255,8 +261,16 @@ export const createModule2Cell = (data: { codigo: string; tipo: VehicleType }) =
 
 export const updateModule2Cell = (
   codigo: string,
-  data: { estado?: 'Libre' | 'Fuera de servicio'; tipo?: VehicleType; motivo: string },
+  data: { estado?: 'Libre' | 'Fuera de servicio'; motivo: string },
 ) => patch<CellRecord>(`/api/celdas/${encodeURIComponent(codigo)}`, data)
+
+// Convierte una celda de carro en 2 de moto, o la pareja de una moto original en 1 de carro. Devuelve el mapa completo.
+export const convertModule2Cell = (codigo: string, motivo: string) =>
+  post<CellRecord[]>(`/api/celdas/${encodeURIComponent(codigo)}/convertir`, { motivo })
+
+// Deshace la conversión a la que pertenece la celda. Devuelve el mapa completo.
+export const restoreModule2Cell = (codigo: string, motivo: string) =>
+  post<CellRecord[]>(`/api/celdas/${encodeURIComponent(codigo)}/restablecer`, { motivo })
 
 export const deleteModule2Cell = (codigo: string) =>
   del<{ codigo: string; eliminado: boolean; detalle: string }>(`/api/celdas/${encodeURIComponent(codigo)}`)

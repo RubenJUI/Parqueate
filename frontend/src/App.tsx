@@ -33,6 +33,8 @@ import {
   toggleModule2UserStatus,
   toggleModule2VehicleStatus,
   updateModule2Cell,
+  convertModule2Cell,
+  restoreModule2Cell,
   updateModule2User,
 } from './api/client'
 import type { Cell, EntryResult, Occupancy, OpTab, Ticket, User, VehicleLookup, VehicleType } from './domain/parking'
@@ -613,7 +615,6 @@ function UsersModule({
   const [newCellError, setNewCellError] = useState('')
   const [cellReason, setCellReason] = useState('')
   const [cellActionError, setCellActionError] = useState('')
-  const [cellNewType, setCellNewType] = useState<VehicleType>('Carro')
   const [registerForm, setRegisterForm] = useState({ documentoTipo: 'CC' as UserRecord['documentoTipo'], documento: '', nombres: '', apellidos: '', celular: '', correo: '', tipo: 'Carro' as VehicleType, placa: '', marca: '', color: '', habeas: false })
   const [registerError, setRegisterError] = useState('')
   const [registerSuccess, setRegisterSuccess] = useState('')
@@ -911,37 +912,29 @@ function UsersModule({
     }
   }
 
-  const handleCellTypeChange = async () => {
+  // Convierte la celda seleccionada (carro -> 2 motos, o pareja de motos -> carro) o restablece
+  // su conversión. El servidor valida estado, cupo garantizado y reglas; aquí solo se pide el motivo.
+  const handleCellConversion = async (accion: 'convertir' | 'restablecer') => {
     if (!selectedCell) return
     if (!isAdmin) {
-      setCellActionError('Solo el administrador puede cambiar el tipo de vehículo de una celda.')
+      setCellActionError('Solo el administrador puede convertir o restablecer celdas.')
       return
     }
     const reason = cellReason.trim()
     if (!reason) {
-      setCellActionError('Debes indicar el motivo obligatorio para cambiar el tipo de celda.')
+      setCellActionError(`Debes indicar el motivo para ${accion} la celda.`)
       return
     }
-    if (selectedCell.estado === 'Ocupada') {
-      setCellActionError(`No se puede modificar la celda ${selectedCell.codigo} porque está ocupada actualmente por el vehículo de placa ${selectedCell.placa}.`)
-      return
-    }
-    if (cellNewType === selectedCell.tipo) {
-      setCellActionError(`La celda ${selectedCell.codigo} ya está configurada para ${selectedCell.tipo}.`)
-      return
-    }
-
     try {
-      const updatedCell = await updateModule2Cell(selectedCell.codigo, {
-        tipo: cellNewType,
-        motivo: reason,
-      })
-      setCells((prev) =>
-        syncCellsWithTickets(
-          prev.map((cell) => (cell.codigo === updatedCell.codigo ? updatedCell : cell)),
-          openTickets,
-        ),
-      )
+      const mapa = accion === 'convertir'
+        ? await convertModule2Cell(selectedCell.codigo, reason)
+        : await restoreModule2Cell(selectedCell.codigo, reason)
+      setCells(syncCellsWithTickets(mapa, openTickets))
+      // La celda seleccionada deja de existir: se selecciona la primera celda resultante.
+      const destino = accion === 'convertir'
+        ? mapa.find((c) => c.espacio_original?.split(' y ').includes(selectedCell.codigo))
+        : mapa.find((c) => selectedCell.espacio_original?.split(' y ').includes(c.codigo))
+      setSelectedCellCode(destino?.codigo ?? null)
       setCellReason('')
       setCellActionError('')
     } catch (err) {
@@ -1243,19 +1236,65 @@ function UsersModule({
       )
     }
 
-    const carCells = filteredCells.filter((cell) => cell.tipo === 'Carro')
-    const motoCells = filteredCells.filter((cell) => cell.tipo === 'Moto')
     const carTotal = cells.filter((cell) => cell.tipo === 'Carro').length
     const motoTotal = cells.filter((cell) => cell.tipo === 'Moto').length
     const carAvailable = cells.filter((cell) => cell.tipo === 'Carro' && cell.estado !== 'Fuera de servicio').length
     const motoAvailable = cells.filter((cell) => cell.tipo === 'Moto' && cell.estado !== 'Fuera de servicio').length
-    const firstCarCode = carCells[0]?.codigo ?? 'C-01'
-    const lastCarCode = carCells[carCells.length - 1]?.codigo ?? 'C-70'
-    const firstMotoCode = motoCells[0]?.codigo ?? 'M-01'
-    const lastMotoCode = motoCells[motoCells.length - 1]?.codigo ?? 'M-10'
+
+    // HU-C01: cada celda aparece en la sección de su tipo actual (C-72 con los carros, M-11 con las motos).
+    // Las que resultan de una conversión van agrupadas en un recuadro que indica su espacio original
+    // (M-11 y M-12 en el espacio C-20) y se ordenan por su propio código.
+    type MapItem =
+      | { kind: 'cell'; codigo: string; cell: CellRecord }
+      | { kind: 'space'; codigo: string; espacio: string; cells: CellRecord[] }
+    const compararCodigos = (a: string, b: string) => a.localeCompare(b, 'es', { numeric: true })
+    const buildSection = (tipo: VehicleType) => {
+      const items: MapItem[] = []
+      const espacios = new Map<string, CellRecord[]>()
+      for (const cell of filteredCells) {
+        if (cell.espacio_original) {
+          if (cell.tipo !== tipo) continue
+          espacios.set(cell.espacio_original, [...(espacios.get(cell.espacio_original) ?? []), cell])
+        } else if (cell.tipo === tipo) {
+          items.push({ kind: 'cell', codigo: cell.codigo, cell })
+        }
+      }
+      espacios.forEach((grupo, espacio) => {
+        const ordenadas = grupo.sort((a, b) => compararCodigos(a.codigo, b.codigo))
+        items.push({ kind: 'space', codigo: ordenadas[0].codigo, espacio, cells: ordenadas })
+      })
+      items.sort((a, b) => compararCodigos(a.codigo, b.codigo))
+      const total = items.reduce((acc, item) => acc + (item.kind === 'cell' ? 1 : item.cells.length), 0)
+      const last = items[items.length - 1]
+      return { items, total, first: items[0]?.codigo, last: last?.kind === 'space' ? last.cells[last.cells.length - 1].codigo : last?.codigo }
+    }
+    const carSection = buildSection('Carro')
+    const motoSection = buildSection('Moto')
 
     const statusClassFor = (estado: CellStatus) =>
       estado === 'Libre' ? 'free libre' : estado === 'Ocupada' ? 'occupied ocupada' : 'disabled fueradeservicio'
+
+    const renderCellCard = (cell: CellRecord) => (
+      <button
+        key={cell.codigo}
+        type="button"
+        className={`cell-card ${statusClassFor(cell.estado)} ${selectedCell?.codigo === cell.codigo ? 'selected' : ''}`}
+        onClick={() => {
+          setSelectedCellCode(cell.codigo)
+          setCellActionError('')
+        }}
+      >
+        <span className="cell-code">{cell.codigo}</span>
+        <span className="cell-status-label">{cell.estado}</span>
+        {cell.estado === 'Ocupada' ? (
+          <small>{cell.placa}{cell.hora ? ` · ${cell.hora}` : ''}</small>
+        ) : cell.estado === 'Fuera de servicio' ? (
+          <small>{cell.motivo ?? 'En mantenimiento'}</small>
+        ) : (
+          <small>Disponible</small>
+        )}
+      </button>
+    )
 
     return (
       <div className="module-panel">
@@ -1309,65 +1348,23 @@ function UsersModule({
         </div>
 
         <div className="cell-layout">
-          {carCells.length > 0 && (
-            <div className="cell-group">
-              <h3><VehicleIcon tipo="Carro" />CARROS / {firstCarCode} — {lastCarCode} ({carCells.length})</h3>
-              <div className="cell-grid">
-                {carCells.map((cell) => (
-                  <button
-                    key={cell.codigo}
-                    type="button"
-                    className={`cell-card ${statusClassFor(cell.estado)} ${selectedCell?.codigo === cell.codigo ? 'selected' : ''}`}
-                    onClick={() => {
-                      setSelectedCellCode(cell.codigo)
-                      setCellNewType(cell.tipo === 'Carro' ? 'Moto' : 'Carro')
-                      setCellActionError('')
-                    }}
-                  >
-                    <span className="cell-code">{cell.codigo}</span>
-                    <span className="cell-status-label">{cell.estado}</span>
-                    {cell.estado === 'Ocupada' ? (
-                      <small>{cell.placa}{cell.hora ? ` · ${cell.hora}` : ''}</small>
-                    ) : cell.estado === 'Fuera de servicio' ? (
-                      <small>{cell.motivo ?? 'En mantenimiento'}</small>
-                    ) : (
-                      <small>Disponible</small>
-                    )}
-                  </button>
+          {([['Carro', carSection], ['Moto', motoSection]] as const).map(([tipo, section]) => section.items.length > 0 && (
+            <div key={tipo} className="cell-group">
+              <h3><VehicleIcon tipo={tipo} />{tipo === 'Carro' ? 'CARROS' : 'MOTOS'} / {section.first} — {section.last} ({section.total})</h3>
+              <div className={`cell-grid ${tipo === 'Moto' ? 'small-grid' : ''}`}>
+                {section.items.map((item) => item.kind === 'cell' ? renderCellCard(item.cell) : (
+                  // Ocupa una columna por cada celda que contiene, así cada celda mide igual que las demás de su tipo.
+                  <div key={item.espacio} className={`cell-space ${item.cells.length === 1 ? 'single' : ''}`} title={`Celda convertida: antes ${item.espacio}`} style={{ gridColumn: `span ${item.cells.length}` }} role="group" aria-label={`Espacio ${item.espacio} convertido: ${item.cells.map((c) => c.codigo).join(' y ')}`}>
+                    <div className="cell-space-head">
+                      <span>Antes {item.cells.length === 1 ? item.espacio.replace(' y ', '/') : item.espacio}</span>
+                      <em>Convertido</em>
+                    </div>
+                    <div className="cell-space-cells">{item.cells.map(renderCellCard)}</div>
+                  </div>
                 ))}
               </div>
             </div>
-          )}
-
-          {motoCells.length > 0 && (
-            <div className="cell-group">
-              <h3><VehicleIcon tipo="Moto" />MOTOS / {firstMotoCode} — {lastMotoCode} ({motoCells.length})</h3>
-              <div className="cell-grid small-grid">
-                {motoCells.map((cell) => (
-                  <button
-                    key={cell.codigo}
-                    type="button"
-                    className={`cell-card ${statusClassFor(cell.estado)} ${selectedCell?.codigo === cell.codigo ? 'selected' : ''}`}
-                    onClick={() => {
-                      setSelectedCellCode(cell.codigo)
-                      setCellNewType(cell.tipo === 'Carro' ? 'Moto' : 'Carro')
-                      setCellActionError('')
-                    }}
-                  >
-                    <span className="cell-code">{cell.codigo}</span>
-                    <span className="cell-status-label">{cell.estado}</span>
-                    {cell.estado === 'Ocupada' ? (
-                      <small>{cell.placa}{cell.hora ? ` · ${cell.hora}` : ''}</small>
-                    ) : cell.estado === 'Fuera de servicio' ? (
-                      <small>{cell.motivo ?? 'En mantenimiento'}</small>
-                    ) : (
-                      <small>Disponible</small>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          ))}
         </div>
 
         {selectedCell ? (
@@ -1379,6 +1376,7 @@ function UsersModule({
               {selectedCell.placa && <span className="detail-tag muted">Placa: {selectedCell.placa}</span>}
               {selectedCell.hora && <span className="detail-tag muted">Ingreso: {selectedCell.hora}</span>}
               {selectedCell.estado === 'Fuera de servicio' && selectedCell.motivo && <span className="detail-tag muted">Motivo actual: {selectedCell.motivo}</span>}
+              {selectedCell.espacio_original && <span className="detail-tag indigo">En el espacio {selectedCell.espacio_original} (convertido)</span>}
             </div>
 
             {cellActionError && <div className="notice notice-red"><Icon name="alert" size={16} /><span>{cellActionError}</span></div>}
@@ -1386,33 +1384,34 @@ function UsersModule({
             {selectedCell.estado === 'Ocupada' ? (
               <div className="notice notice-amber">
                 <Icon name="alert" size={16} />
-                <span>La celda {selectedCell.codigo} está ocupada por {selectedCell.placa} y no puede pasar a Fuera de servicio ni cambiar de tipo hasta que se registre la salida en Operaciones.</span>
+                <span>La celda {selectedCell.codigo} está ocupada por {selectedCell.placa} y no puede pasar a Fuera de servicio, convertirse ni restablecerse hasta que se registre la salida en Operaciones.</span>
               </div>
             ) : !isAdmin ? (
-              <div className="permission-note">Solo el perfil de Administrador puede inhabilitar celdas, restablecerlas a Libre, cambiar su tipo o eliminarlas.</div>
+              <div className="permission-note">Solo el perfil de Administrador puede poner celdas fuera de servicio, habilitarlas, convertirlas, restablecerlas o eliminarlas.</div>
             ) : (
               <>
-                <div className="cell-detail-grid">
-                  <div className="field">
-                    <label>Motivo obligatorio ({selectedCell.estado === 'Fuera de servicio' ? 'para restablecer o cambiar tipo' : 'para fuera de servicio o cambio de tipo'})</label>
-                    <input value={cellReason} onChange={(e) => { setCellReason(e.target.value); setCellActionError('') }} placeholder={selectedCell.estado === 'Fuera de servicio' ? 'Ej. Reparación completada, celda habilitada...' : 'Ej. Piso en reparación, mantenimiento de luminaria...'} />
-                  </div>
-                  <div className="field">
-                    <label>Cambiar tipo de celda</label>
-                    <select value={cellNewType} onChange={(e) => setCellNewType(e.target.value as VehicleType)}>
-                      <option value="Carro">Carro</option>
-                      <option value="Moto">Moto</option>
-                    </select>
-                  </div>
+                <div className="field">
+                  <label>Motivo (obligatorio)</label>
+                  <input value={cellReason} onChange={(e) => { setCellReason(e.target.value); setCellActionError('') }} placeholder={selectedCell.estado === 'Fuera de servicio' ? 'Ej. Reparación completada, celda habilitada...' : 'Ej. Piso en reparación, más demanda de motos...'} />
                 </div>
                 <div className="detail-actions">
                   <button className={selectedCell.estado === 'Libre' ? 'secondary-btn danger' : 'primary-btn'} onClick={handleCellStatusChange}>
                     {selectedCell.estado === 'Libre' ? 'Pasar a Fuera de servicio' : 'Restablecer / Habilitar a Libre'}
                   </button>
-                  <button className="secondary-btn" onClick={handleCellTypeChange}>
-                    Guardar cambio de tipo ({selectedCell.tipo} → {cellNewType})
-                  </button>
-                  <button
+                  {selectedCell.espacio_original ? (
+                    <button className="secondary-btn" onClick={() => handleCellConversion('restablecer')}>
+                      <Icon name="history" size={15} />Restablecer espacio {selectedCell.espacio_original}
+                    </button>
+                  ) : selectedCell.tipo === 'Carro' ? (
+                    <button className="secondary-btn" disabled={selectedCell.estado !== 'Libre'} title={selectedCell.estado !== 'Libre' ? 'La celda debe estar libre para convertirla.' : undefined} onClick={() => handleCellConversion('convertir')}>
+                      <VehicleIcon tipo="Moto" size={15} />Convertir en 2 celdas de moto
+                    </button>
+                  ) : selectedCell.pareja ? (
+                    <button className="secondary-btn" disabled={selectedCell.estado !== 'Libre'} title={selectedCell.estado !== 'Libre' ? 'La celda debe estar libre para convertirla.' : undefined} onClick={() => handleCellConversion('convertir')}>
+                      <VehicleIcon tipo="Carro" size={15} />Convertir {[selectedCell.codigo, selectedCell.pareja].sort().join(' y ')} en 1 celda de carro
+                    </button>
+                  ) : null}
+                  {!selectedCell.espacio_original && <button
                     type="button"
                     className="secondary-btn danger"
                     onClick={() => {
@@ -1426,14 +1425,24 @@ function UsersModule({
                     }}
                   >
                     <Icon name="trash" size={15} />Eliminar celda
-                  </button>
+                  </button>}
                 </div>
+                <p className="detail-hint">
+                  {selectedCell.espacio_original
+                    ? `Restablecer devuelve el espacio a ${selectedCell.espacio_original}. Todas sus celdas deben estar libres.`
+                    : selectedCell.tipo === 'Carro'
+                      ? 'Convertir crea 2 celdas de moto con los siguientes códigos disponibles; la celda debe estar libre.'
+                      : selectedCell.pareja
+                        ? `Convertir une ${selectedCell.codigo} con su pareja ${selectedCell.pareja} en 1 celda de carro; ambas deben estar libres.`
+                        : 'Solo las parejas fijas de motos originales (M-01 con M-02 … M-09 con M-10) se pueden convertir a carro.'}
+                </p>
               </>
             )}
 
             <div className="history-list">
               <h4>Historial de trazabilidad de la celda {selectedCell.codigo}</h4>
               <div className="history-scroll">
+                {selectedCell.historial.length === 0 && <p className="detail-hint">Sin cambios registrados para esta celda.</p>}
                 {selectedCell.historial.map((entry) => (
                   <div key={entry.id} className="history-item">
                     <div>

@@ -2832,3 +2832,53 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
 .actions-dropdown-item.danger .icon { color: currentColor; }
 .secondary-btn.danger { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .hud-maint-badge { display: inline-flex; align-items: center; gap: 3px; }
+
+/* Espacio convertido (mapa de celdas): agrupa las celdas resultantes dentro del espacio original.
+   Ocupa el ancho de dos celdas; borde sólido índigo para no confundirse con "fuera de servicio" (punteado). */
+.cell-space {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 2px solid #C7D2FE;
+  background: #EEF2FF;
+}
+.cell-space-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #3730A3;
+  letter-spacing: .02em;
+}
+.cell-space-head em {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-style: normal;
+  font-weight: 600;
+  font-size: 9px;
+  color: #4F46E5;
+}
+.cell-space-cells {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 6px;
+  flex: 1;
+}
+.cell-space-cells .cell-card { min-height: 64px; }
+.cell-space-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Recuadro de una sola celda: solo "Antes M-09 y M-10" en una línea, para que mida como sus vecinas. */
+.cell-space.single .cell-space-head em { display: none; }
+.cell-space.single { padding: 3px; gap: 2px; }
+.cell-space.single .cell-space-head { font-size: 9px; padding: 0 2px; }
+.cell-space.single .cell-card { min-height: 0; padding: 5px 4px; }
+.detail-tag.indigo { background: #EEF2FF; color: #3730A3; border-color: #C7D2FE; }
+.detail-hint { margin: 8px 0 0; font-size: 12px; color: #64748B; }
+.detail-actions .secondary-btn { display: inline-flex; align-items: center; gap: 6px; }
+.detail-actions button:disabled { opacity: .5; cursor: not-allowed; }
