@@ -220,6 +220,32 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
   color: var(--subtle);
   font-size: 9px;
 }
+/* Periodo del día (a. m. / p. m.) junto a la hora del reloj, en el login y en la estación. */
+/* Reloj en vivo de la estación (hora de Medellín), junto a la marca. */
+.canvas-identity .canvas-clock {
+  margin-left: 8px;
+  min-height: 38px;
+  padding: 5px 14px;
+  border: 1px solid rgba(255,255,255,.92);
+  border-radius: 999px;
+  background: rgba(255,255,255,.78);
+  box-shadow: 0 5px 20px rgba(15,23,42,.06), inset 0 0 0 1px rgba(226,232,240,.65);
+  backdrop-filter: blur(18px) saturate(150%);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+.canvas-identity .canvas-clock strong {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+}
+.canvas-identity .canvas-clock span {
+  margin-top: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
 .occupancy-hud {
   position: fixed;
   top: 24px;
@@ -1728,7 +1754,9 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
 }
 @media (max-width: 620px) {
   .canvas-identity { top: 17px; left: 16px; }
-  .canvas-identity > div:last-child { display: none; }
+  .canvas-identity > div { display: none; }
+  .canvas-identity .canvas-clock { margin-left: 0; padding: 0 11px; }
+  .canvas-identity .canvas-clock span { display: none; }
   .occupancy-hud { top: 16px; right: 16px; }
   .hud-pill { height: 32px; padding: 0 9px; }
   .hud-pill > span { display: none; }
@@ -1897,6 +1925,7 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
   font-size: 10px;
 }
 .lock-clock {
+  display: block;
   text-align: center;
 }
 .lock-clock strong,
@@ -1914,7 +1943,6 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
   margin-top: 6px;
   color: var(--muted);
   font-size: 8px;
-  text-transform: capitalize;
 }
 .system-pill {
   justify-self: end;
@@ -2739,4 +2767,48 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
 .vehicle-delete-btn:disabled {
   opacity: .45;
   cursor: not-allowed;
+}
+
+/* AM/PM como etiqueta pequeña en mayúsculas alineada arriba de los dígitos. En el login
+   queda fuera del flujo para que la hora siga centrada sobre la fecha. */
+.lock-clock strong,
+.canvas-clock strong {
+  position: relative;
+}
+.lock-clock strong small,
+.canvas-clock strong small {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  line-height: 1;
+  color: var(--muted);
+}
+.lock-clock strong {
+  display: inline-block;
+}
+.lock-clock strong small {
+  position: absolute;
+  top: .2em;
+  left: calc(100% + 6px);
+}
+.canvas-clock strong {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 3px;
+}
+.canvas-clock strong small {
+  font-size: 8px;
+  margin-top: 1px;
+}
+@media (max-width: 680px) {
+  /* En móvil el reloj se alinea a la derecha: la etiqueta vuelve al flujo para no salirse. */
+  .lock-clock strong {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .lock-clock strong small {
+    position: static;
+    margin-top: .2em;
+  }
 }

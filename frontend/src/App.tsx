@@ -37,7 +37,7 @@ import {
 } from './api/client'
 import type { Cell, EntryResult, Occupancy, OpTab, Ticket, User, VehicleLookup, VehicleType } from './domain/parking'
 import type { CellRecord, CellStatus, UserRecord, UserStatus } from './api/client'
-import { formatDate, formatDateTime, initials, ticketCode, todayLong } from './shared/formatters'
+import { formatDate, formatDateTime, initials, medellinDate, medellinTime, ticketCode, todayLong } from './shared/formatters'
 
 const errorMessage = (error: unknown) => error instanceof ApiError ? error.message : 'Ocurrió un error inesperado'
 
@@ -52,6 +52,10 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     x: <path d="M18 6 6 18M6 6l12 12" />,
     car: <><path d="m3 11 2-5h14l2 5" /><path d="M5 11h14a2 2 0 0 1 2 2v4H3v-4a2 2 0 0 1 2-2ZM5 17v2M19 17v2" /><circle cx="7" cy="14" r="1" /><circle cx="17" cy="14" r="1" /></>,
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+    // Tarjeta de pago: módulo de pagos y mensualidades.
+    card: <><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M2 10h20M6 15h4" /></>,
+    // Tuerca: módulo de configuración.
+    settings: <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></>,
   }
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{paths[name]}</svg>
 }
@@ -73,6 +77,27 @@ function Modal({ title, subtitle, onClose, children }: { title: string; subtitle
 
 function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return <label className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>
+}
+
+// Fecha y hora actuales, renovadas cada segundo mientras el componente esté montado.
+function useNow() {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return now
+}
+
+// Reloj en vivo de la estación con la hora de Medellín. Tiene su propio estado para que
+// el tic de cada segundo no vuelva a renderizar la pantalla que lo contiene.
+function LiveClock({ className }: { className: string }) {
+  const now = useNow()
+  const { hora, periodo } = medellinTime(now)
+  return <time className={className} dateTime={now.toISOString()}>
+    <strong>{hora}<small>{periodo}</small></strong>
+    <span>{medellinDate(now)} · Medellín</span>
+  </time>
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -200,6 +225,7 @@ function Operations({
     <div className="canvas-identity">
       <img className="canvas-logo" src="/logo.svg" alt="" />
       <div><strong>PARQUEATE</strong><span>Medellín</span></div>
+      <LiveClock className="canvas-clock" />
     </div>
 
     <main className="main canvas-main">
@@ -248,8 +274,8 @@ function Operations({
         <div className="dock-navigation">
           <button aria-label="Operaciones" className={`dock-item ${opTab === 'console' || opTab === 'inside' || opTab === 'history' ? 'active' : ''}`} onClick={() => setOpTab('console')}><Icon name="grid" size={18} /><span>Operaciones</span></button>
           <button aria-label="Usuarios y celdas" className={`dock-item ${opTab === 'users' ? 'active' : ''}`} onClick={() => setOpTab('users')}><Icon name="car" size={18} /><span>Usuarios y celdas</span></button>
-          <button aria-label="Pagos" className={`dock-item ${opTab === 'payments' ? 'active' : ''}`} onClick={() => setOpTab('payments')}><Icon name="check" size={18} /><span>Pagos</span></button>
-          <button aria-label="Configuración" className={`dock-item ${opTab === 'config' ? 'active' : ''}`} onClick={() => setOpTab('config')}><Icon name="alert" size={18} /><span>Configuración</span></button>
+          <button aria-label="Pagos" className={`dock-item ${opTab === 'payments' ? 'active' : ''}`} onClick={() => setOpTab('payments')}><Icon name="card" size={18} /><span>Pagos</span></button>
+          <button aria-label="Configuración" className={`dock-item ${opTab === 'config' ? 'active' : ''}`} onClick={() => setOpTab('config')}><Icon name="settings" size={18} /><span>Configuración</span></button>
         </div>
         <div className="dock-role-switch" aria-label="Cambio de rol">
           <button className={roleMode === 'Operario' ? 'active' : ''} onClick={() => setRoleMode('Operario')} type="button">Operario</button>
@@ -271,12 +297,9 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [sending, setSending] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [online, setOnline] = useState<boolean | null>(null)
-  const [now, setNow] = useState(new Date())
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000)
     checkHealth().then(() => setOnline(true)).catch(() => setOnline(false))
-    return () => window.clearInterval(timer)
   }, [])
 
   const submit = async (e: FormEvent) => {
@@ -293,8 +316,6 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     }
   }
 
-  const medellinTime = new Intl.DateTimeFormat('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hour12: false }).format(now)
-  const medellinDate = new Intl.DateTimeFormat('es-CO', { timeZone: 'America/Bogota', weekday: 'long', day: 'numeric', month: 'long' }).format(now)
   const carCells = Array.from({ length: 70 }, (_, i) => `C-${String(i + 1).padStart(2, '0')}`)
   const motoCells = Array.from({ length: 10 }, (_, i) => `M-${String(i + 1).padStart(2, '0')}`)
 
@@ -309,7 +330,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
 
     <div className="lock-status">
       <div className="lock-brand"><img src="/logo.svg" alt="" /><strong>PARQUEATE</strong></div>
-      <div className="lock-clock"><strong>{medellinTime}</strong><span>{medellinDate} · Medellín</span></div>
+      <LiveClock className="lock-clock" />
       {online !== null && <div className={`system-pill ${online ? '' : 'offline'}`}><i />{online ? 'Sistema en línea' : 'Sin conexión con el servidor'}</div>}
     </div>
 
