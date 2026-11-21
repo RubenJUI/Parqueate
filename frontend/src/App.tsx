@@ -48,7 +48,7 @@ import {
   updateModule2Cell,
   updateModule2User,
 } from './api/client'
-import type { Cell, EntryResult, Occupancy, OpTab, Ticket, User, VehicleLookup, VehicleType } from './domain/parking'
+import type { Cell, EntryResult, Occupancy, Ticket, User, VehicleLookup, VehicleType } from './domain/parking'
 import type {
   CellRecord,
   CellStatus,
@@ -94,8 +94,6 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     calendar: <><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>,
     receipt: <><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z" /><path d="M8 9h8M8 13h8M8 17h5" /></>,
     dollar: <><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></>,
-    // Tuerca: módulo de configuración.
-    settings: <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></>,
   }
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{paths[name]}</svg>
 }
@@ -224,6 +222,7 @@ export default function App() {
   )
 }
 
+type ActiveTab = 'console' | 'inside' | 'history' | 'users' | 'payments'
 type UsersSubView = 'directory' | 'map' | 'register'
 type CellTypeFilterOption = 'Todas' | 'Carros' | 'Motos'
 type CellStateFilterOption = 'Todos' | 'Libre' | 'Ocupada' | 'Fuera de servicio'
@@ -251,7 +250,7 @@ function Operations({
   setTariffs: React.Dispatch<React.SetStateAction<TariffsState>>
   onLogout: () => void
 }) {
-  const [opTab, setOpTab] = useState<OpTab>('console')
+  const [opTab, setOpTab] = useState<ActiveTab>('console')
   const [occupancy, setOccupancy] = useState<Occupancy[]>([])
   const [openTickets, setOpenTickets] = useState<Ticket[]>([])
   // Se incrementa después de cada movimiento para que las vistas vuelvan a consultar la API.
@@ -383,7 +382,6 @@ function Operations({
             onNotify={notify}
           />
         )}
-        {opTab === 'config' && <ModulePlaceholder title="Configuración" description="Parámetros del sistema, celdas, acceso y reglas operativas." />}
       </div>
     </main>
 
@@ -399,7 +397,6 @@ function Operations({
           <button aria-label="Operaciones" className={`dock-item ${opTab === 'console' || opTab === 'inside' || opTab === 'history' ? 'active' : ''}`} onClick={() => setOpTab('console')}><Icon name="grid" size={18} /><span>Operaciones</span></button>
           <button aria-label="Usuarios y celdas" className={`dock-item ${opTab === 'users' ? 'active' : ''}`} onClick={() => setOpTab('users')}><Icon name="users" size={18} /><span>Usuarios y celdas</span></button>
           <button aria-label="Pagos" className={`dock-item ${opTab === 'payments' ? 'active' : ''}`} onClick={() => setOpTab('payments')}><Icon name="card" size={18} /><span>Pagos</span></button>
-          <button aria-label="Configuración" className={`dock-item ${opTab === 'config' ? 'active' : ''}`} onClick={() => setOpTab('config')}><Icon name="settings" size={18} /><span>Configuración</span></button>
         </div>
         {/* Solo el administrador puede previsualizar la vista del operario; un operario nunca ve este selector. */}
         {user.rol === 'Administrador' && <div className="dock-role-switch" aria-label="Vista previa por rol">
@@ -481,8 +478,8 @@ function OperationsHeader({
   setPaymentsSubView,
   expiringCount = 0,
 }: {
-  tab: OpTab
-  setTab: (t: OpTab) => void
+  tab: ActiveTab
+  setTab: (t: ActiveTab) => void
   totalInside: number
   cells: CellRecord[]
   onSelectVehicleType: (tipo: VehicleType) => void
@@ -490,8 +487,8 @@ function OperationsHeader({
   setPaymentsSubView?: (v: PaymentsSubView) => void
   expiringCount?: number
 }) {
-  const pageTitle = tab === 'console' ? '¿Qué vehículo quieres registrar?' : tab === 'inside' ? 'Vehículos dentro' : tab === 'history' ? 'Historial y trazabilidad' : tab === 'users' ? 'Usuarios y celdas' : tab === 'payments' ? 'Pagos y mensualidades' : 'Configuración del sistema'
-  const pageSubtitle = tab === 'console' ? 'Valida una placa y completa el movimiento en segundos.' : tab === 'inside' || tab === 'history' ? 'Consulta la operación sin salir de la estación.' : tab === 'users' ? 'Gestiona acceso, usuarios y disponibilidad del parqueadero.' : tab === 'payments' ? 'Administra pagos, vigencias y recordatorios del servicio.' : 'Configura celdas, roles y reglas operativas del sistema.'
+  const pageTitle = tab === 'console' ? '¿Qué vehículo quieres registrar?' : tab === 'inside' ? 'Vehículos dentro' : tab === 'history' ? 'Historial y trazabilidad' : tab === 'users' ? 'Usuarios y celdas' : 'Pagos y mensualidades'
+  const pageSubtitle = tab === 'console' ? 'Valida una placa y completa el movimiento en segundos.' : tab === 'inside' || tab === 'history' ? 'Consulta la operación sin salir de la estación.' : tab === 'users' ? 'Gestiona acceso, usuarios y disponibilidad del parqueadero.' : 'Administra pagos, vigencias y recordatorios del servicio.'
 
   const renderOccupancyHud = () => (
     <div className="occupancy-hud" role="region" aria-label="Resumen de celdas en vivo">
@@ -536,7 +533,7 @@ function OperationsHeader({
     </div>
   )
 
-  if (tab === 'users' || tab === 'config') {
+  if (tab === 'users') {
     return (
       <>
         {renderOccupancyHud()}
@@ -3841,15 +3838,6 @@ function PaymentsModule({
       )}
     </section>
   )
-}
-
-function ModulePlaceholder({ title, description }: { title: string; description: string }) {
-  return <section className="table-page"><div className="table-title"><div><span className="eyebrow">MÓDULO</span><h1>{title}</h1></div></div><div className="card table-card"><div className="module-placeholder">
-    <div className="placeholder-icon"><Icon name="grid" size={28} /></div>
-    <h2>{title}</h2>
-    <p>{description}</p>
-    <span>Se mantiene con la misma lógica del backend y listo para conectarse con la API en la siguiente etapa.</span>
-  </div></div></section>
 }
 
 function TableShell({ title, eyebrow, actions, children }: { title: string; eyebrow: string; actions: ReactNode; children: ReactNode }) {
