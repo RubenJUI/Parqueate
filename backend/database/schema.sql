@@ -159,3 +159,50 @@ CREATE INDEX ix_pago_placa_fecha ON pago (placa, fecha_pago DESC);
 CREATE INDEX ix_tiquete_entrada ON tiquete (fecha_hora_entrada);
 CREATE INDEX IF NOT EXISTS ix_auditoria_usuario_propietario ON auditoria_usuario (id_propietario, fecha_cambio DESC);
 CREATE INDEX IF NOT EXISTS ix_historial_celda_codigo ON historial_celda (codigo_celda, fecha_cambio DESC);
+
+-- Tablas del Modulo 3: Gestion de Pagos de Mensualidades, Tarifas y Reportes
+CREATE TABLE IF NOT EXISTS tarifa_mensualidad (
+    id SERIAL PRIMARY KEY,
+    tipo_vehiculo VARCHAR(20) NOT NULL CHECK (tipo_vehiculo IN ('Carro', 'Moto')),
+    valor_cop INTEGER NOT NULL CHECK (valor_cop > 0),
+    valor_anterior_cop INTEGER,
+    fecha_inicio DATE NOT NULL DEFAULT CURRENT_DATE,
+    motivo TEXT NOT NULL,
+    usuario_responsable VARCHAR(100) NOT NULL,
+    fecha_cambio TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS pago_mensualidad (
+    id SERIAL PRIMARY KEY,
+    numero_comprobante VARCHAR(20) UNIQUE NOT NULL,
+    id_propietario INTEGER NOT NULL REFERENCES propietario(id_propietario),
+    placa_vehiculo VARCHAR(10) NOT NULL REFERENCES vehiculo(placa),
+    tipo_vehiculo VARCHAR(20) NOT NULL CHECK (tipo_vehiculo IN ('Carro', 'Moto')),
+    meses_pagados INTEGER NOT NULL CHECK (meses_pagados BETWEEN 1 AND 3),
+    valor_unitario_cop INTEGER NOT NULL CHECK (valor_unitario_cop > 0),
+    valor_total_cop INTEGER NOT NULL CHECK (valor_total_cop > 0),
+    fecha_inicio_vigencia DATE NOT NULL,
+    fecha_fin_vigencia DATE NOT NULL,
+    metodo_pago VARCHAR(20) NOT NULL CHECK (metodo_pago IN ('Efectivo', 'Transferencia', 'Tarjeta')),
+    referencia_pago VARCHAR(100),
+    valor_recibido_cop INTEGER,
+    cambio_cop INTEGER,
+    estado VARCHAR(20) NOT NULL DEFAULT 'Registrado' CHECK (estado IN ('Registrado', 'Anulado')),
+    operario_registro VARCHAR(100) NOT NULL,
+    fecha_registro TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    usuario_anulacion VARCHAR(100),
+    fecha_anulacion TIMESTAMP,
+    motivo_anulacion TEXT
+);
+
+CREATE TABLE IF NOT EXISTS auditoria_reporte (
+    id SERIAL PRIMARY KEY,
+    usuario_responsable VARCHAR(100) NOT NULL,
+    fecha_generacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    rango_fechas VARCHAR(60) NOT NULL,
+    filtros TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_pago_mensualidad_placa ON pago_mensualidad (placa_vehiculo, id DESC);
+CREATE INDEX IF NOT EXISTS ix_pago_mensualidad_fecha ON pago_mensualidad (fecha_registro DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_tarifa_mensualidad_tipo ON tarifa_mensualidad (tipo_vehiculo, fecha_inicio DESC, id DESC);

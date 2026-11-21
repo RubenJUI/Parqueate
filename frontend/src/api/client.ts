@@ -157,6 +157,8 @@ export type CellRecord = {
   tipo_original?: VehicleType | null
   // Moto original: código de su pareja fija (M-05 -> M-06); null si no puede convertirse a carro.
   pareja?: string | null
+  // Conteo real de mensualidades vigentes ("Al día" + "Por vencer") para el tipo de esta celda (RN-P05/RN-C05).
+  mensualidades_vigentes?: number | null
 }
 
 export type UserModuleVehicle = {
@@ -412,7 +414,144 @@ export type PaymentRecord = {
   motivoAnulacion: string | null
   usuarioAnulacion: string | null
   fechaHoraAnulacion: string | null
+  esUltimoActivo?: boolean
 }
+
+export type PlateSubscriptionStatusOut = {
+  placa: string
+  tipo_vehiculo: VehicleType
+  estado: 'Vigente' | 'Por vencer' | 'Vencida' | 'Sin mensualidad'
+  estado_ui: SubscriptionState
+  fecha_inicio_vigencia: string | null
+  fecha_fin_vigencia: string | null
+  dias_restantes: number | null
+  dias_mora: number
+  usuario_activo: boolean
+  vehiculo_activo: boolean
+  puede_ingresar: boolean
+}
+
+export type ExpiringItemOut = {
+  id_propietario: number
+  userId: number
+  documentoTipo: UserRecord['documentoTipo']
+  documento: string
+  nombreTitular: string
+  celularTitular: string
+  placa: string
+  tipoVehiculo: VehicleType
+  marcaVehiculo: string
+  colorVehiculo: string
+  fechaInicio: string
+  fechaVencimiento: string
+  estado: 'Por vencer' | 'Vencida'
+  diasRestantes: number
+  diasMora: number
+}
+
+export type CashboxSummaryOut = {
+  fecha: string
+  operario_filtro: string
+  total_recaudado_cop: number
+  cantidad_pagos_validos: number
+  cantidad_pagos_anulados: number
+  total_anulado_cop: number
+  por_metodo_pago: Array<{ metodo: PaymentMethod; cantidad: number; total_cop: number }>
+  por_tipo_vehiculo: Array<{ tipo: VehicleType; cantidad: number; total_cop: number }>
+  operarios_disponibles: string[]
+}
+
+export type CollectionReportOut = {
+  fecha_inicio: string
+  fecha_fin: string
+  total_recaudado_cop: number
+  cantidad_pagos_validos: number
+  ticket_promedio_cop: number
+  cantidad_pagos_anulados: number
+  total_anulado_cop: number
+  por_dia: Array<{ fecha: string; cantidad: number; total_cop: number }>
+  por_tipo_vehiculo: Array<{ tipo: VehicleType; cantidad: number; total_cop: number }>
+  por_metodo_pago: Array<{ metodo: PaymentMethod; cantidad: number; total_cop: number }>
+  por_operario: Array<{ operario: string; cantidad: number; total_cop: number }>
+  pagos: PaymentRecord[]
+}
+
+export const getModule3PlateStatus = (placa: string) =>
+  request<PlateSubscriptionStatusOut>(`/api/pagos/estado/${encodeURIComponent(placa)}`)
+
+export function getModule3Payments(filters?: {
+  q?: string
+  fecha_desde?: string
+  fecha_hasta?: string
+  metodo_pago?: string
+  estado?: string
+}) {
+  const params = new URLSearchParams()
+  if (filters?.q) params.set('q', filters.q)
+  if (filters?.fecha_desde) params.set('fecha_desde', filters.fecha_desde)
+  if (filters?.fecha_hasta) params.set('fecha_hasta', filters.fecha_hasta)
+  if (filters?.metodo_pago && filters.metodo_pago !== 'Todas') params.set('metodo_pago', filters.metodo_pago)
+  if (filters?.estado && filters.estado !== 'Todos') params.set('estado', filters.estado)
+  const qs = params.toString()
+  return request<PaymentRecord[]>(`/api/pagos${qs ? `?${qs}` : ''}`)
+}
+
+export const createModule3Payment = (data: {
+  placa: string
+  meses_pagados: 1 | 2 | 3
+  metodo_pago: PaymentMethod
+  valor_recibido_cop?: number | null
+  referencia_pago?: string | null
+}) => post<PaymentRecord>('/api/pagos', data)
+
+export const annulModule3Payment = (id: number, motivo: string) =>
+  patch<PaymentRecord>(`/api/pagos/${id}/anular`, { motivo })
+
+export function getModule3Expiring(filters?: {
+  estado?: string
+  tipo_vehiculo?: string
+  q?: string
+}) {
+  const params = new URLSearchParams()
+  if (filters?.estado && filters.estado !== 'Todas') params.set('estado', filters.estado)
+  if (filters?.tipo_vehiculo && filters.tipo_vehiculo !== 'Todos') params.set('tipo_vehiculo', filters.tipo_vehiculo)
+  if (filters?.q) params.set('q', filters.q)
+  const qs = params.toString()
+  return request<ExpiringItemOut[]>(`/api/pagos/vencimientos${qs ? `?${qs}` : ''}`)
+}
+
+export function getModule3Cashbox(operario?: string) {
+  const params = new URLSearchParams()
+  if (operario && operario !== 'Todos') params.set('operario', operario)
+  const qs = params.toString()
+  return request<CashboxSummaryOut>(`/api/pagos/caja${qs ? `?${qs}` : ''}`)
+}
+
+export function getModule3Report(filters: {
+  fecha_inicio: string
+  fecha_fin: string
+  tipo_vehiculo?: string
+  metodo_pago?: string
+  operario?: string
+}) {
+  const params = new URLSearchParams({
+    fecha_inicio: filters.fecha_inicio,
+    fecha_fin: filters.fecha_fin,
+  })
+  if (filters.tipo_vehiculo && filters.tipo_vehiculo !== 'Todos') params.set('tipo_vehiculo', filters.tipo_vehiculo)
+  if (filters.metodo_pago && filters.metodo_pago !== 'Todas') params.set('metodo_pago', filters.metodo_pago)
+  if (filters.operario && filters.operario !== 'Todos') params.set('operario', filters.operario)
+  return request<CollectionReportOut>(`/api/pagos/reporte?${params.toString()}`)
+}
+
+export const getModule3Tariffs = () => request<TariffsState>('/api/tarifas')
+
+export const createModule3Tariff = (data: {
+  tipo_vehiculo: VehicleType
+  valor_cop: number
+  fecha_inicio: string
+  motivo: string
+}) => post<TariffsState>('/api/tarifas', data)
 
 export type TariffHistoryEntry = {
   id: number

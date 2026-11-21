@@ -826,6 +826,7 @@ class Modulo2UsuarioConnection:
         """Cuenta entradas/salidas (tiquetes, incluidos los anulados, con sus novedades) y pagos hechos en caja.
 
         El pago inicial automático del registro (origen 'Registro') no es un movimiento.
+        También cuenta cualquier pago registrado o anulado en `pago_mensualidad` (Módulo 3, RN-P06).
         """
         if not placas:
             return {"tiquetes": 0, "pagos": 0}
@@ -835,8 +836,18 @@ class Modulo2UsuarioConnection:
             "SELECT COUNT(*) AS total FROM pago WHERE placa = ANY(%s) AND origen <> 'Registro'",
             (placas,),
         )
-        pagos = cur.fetchone()["total"]
-        return {"tiquetes": tiquetes, "pagos": pagos}
+        pagos_legacy = cur.fetchone()["total"]
+        cur.execute(
+            "SELECT COUNT(*) AS total FROM information_schema.tables WHERE table_name = 'pago_mensualidad'"
+        )
+        pagos_mod3 = 0
+        if cur.fetchone()["total"] > 0:
+            cur.execute(
+                "SELECT COUNT(*) AS total FROM pago_mensualidad WHERE placa_vehiculo = ANY(%s)",
+                (placas,),
+            )
+            pagos_mod3 = cur.fetchone()["total"]
+        return {"tiquetes": tiquetes, "pagos": max(pagos_legacy, pagos_mod3)}
 
     @staticmethod
     def _describir_movimientos(movimientos: Dict[str, int]) -> str:
@@ -1052,6 +1063,10 @@ class Modulo2CeldaConnection:
                 """
             )
             historial_rows = cur.fetchall()
+            vigentes_por_tipo = {
+                "Carro": self._contar_mensualidades_vigentes_reales(cur, "Carro"),
+                "Moto": self._contar_mensualidades_vigentes_reales(cur, "Moto"),
+            }
 
         hist_por_celda: Dict[str, List[dict]] = {}
         for h in historial_rows:
@@ -1101,6 +1116,7 @@ class Modulo2CeldaConnection:
                     "espacio_original": " y ".join(row["codigos_origen"]) if row.get("codigos_origen") else None,
                     "tipo_original": row.get("tipo_origen"),
                     "pareja": _pareja_moto(codigo) if row["tipo_permitido"] == "Moto" and not row.get("id_conversion") else None,
+                    "mensualidades_vigentes": vigentes_por_tipo.get(row["tipo_permitido"], 0),
                 }
             )
         return resultado
@@ -1203,6 +1219,47 @@ class Modulo2CeldaConnection:
         )
         ocupadas = cur.fetchone()["ocupadas"]
         return max(activos, ocupadas)
+
+    def _contar_mensualidades_vigentes_reales(self, cur, tipo_vehiculo: str) -> int:
+        """Alimenta el conteo real de mensualidades vigentes ('Vigente' + 'Por vencer') desde pago_mensualidad."""
+        cur.execute(
+            "SELECT COUNT(*) AS total FROM information_schema.tables WHERE table_name = 'pago_mensualidad'"
+        )
+        if cur.fetchone()["total"] == 0:
+            return self._contar_cupo_requerido(cur, tipo_vehiculo)
+
+        cur.execute("SELECT COUNT(*) AS total FROM pago_mensualidad")
+        if cur.fetchone()["total"] == 0:
+            return self._contar_cupo_requerido(cur, tipo_vehiculo)
+
+        cur.execute(
+            """
+            WITH ultimo_pago AS (
+                SELECT DISTINCT ON (placa_vehiculo)
+                       placa_vehiculo,
+                       fecha_fin_vigencia
+                FROM pago_mensualidad
+                WHERE estado = 'Registrado'
+                ORDER BY placa_vehiculo, id DESC
+            )
+            SELECT COUNT(*) AS al_dia
+            FROM vehiculo v
+            JOIN propietario p ON p.id_propietario = v.id_propietario
+            JOIN ultimo_pago up ON up.placa_vehiculo = v.placa
+            WHERE v.tipo_vehiculo = %s
+              AND COALESCE(v.estado, 'Activo') = 'Activo'
+              AND COALESCE(p.estado, 'Activo') = 'Activo'
+              AND up.fecha_fin_vigencia >= CURRENT_DATE
+            """,
+            (tipo_vehiculo,),
+        )
+        al_dia = int(cur.fetchone()["al_dia"])
+        cur.execute(
+            "SELECT COUNT(*) AS ocupadas FROM espacio WHERE tipo_permitido = %s AND estado = 'Ocupado'",
+            (tipo_vehiculo,),
+        )
+        ocupadas = int(cur.fetchone()["ocupadas"])
+        return max(al_dia, ocupadas)
 
     def actualizar_celda(self, codigo: str, datos: CeldaActualizarSchema, usuario_responsable: str) -> dict:
         codigo_norm = (codigo or "").strip().upper()

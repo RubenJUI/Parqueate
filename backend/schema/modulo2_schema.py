@@ -132,6 +132,8 @@ class CeldaModulo2Out(BaseModel):
     tipo_original: Optional[TipoVehiculo] = None
     # HU-C06: pareja fija de una moto original (M-05 -> "M-06"); None si no puede convertirse a carro.
     pareja: Optional[str] = None
+    # Conteo real de mensualidades vigentes ("Vigente" + "Por vencer") para el tipo de esta celda (RN-P05/RN-C05).
+    mensualidades_vigentes: Optional[int] = None
 
 
 class CeldaCrearSchema(BaseModel):

@@ -21,6 +21,12 @@ from models.modulo2_connection import (
     Modulo2UsuarioConnection,
     ensure_module2_schema,
 )
+from models.modulo3_connection import (
+    Modulo3PagoConnection,
+    Modulo3TarifaConnection,
+    ensure_module3_schema,
+    hoy_colombia,
+)
 from models.pago_connection import PagoConnection, calcular_vigencia
 from models.tarifa_connection import TarifaConnection
 from models.tiquete_connection import TiqueteConnection
@@ -38,6 +44,17 @@ from schema.modulo2_schema import (
     UsuarioModulo2Out,
     VehiculoAsociarSchema,
 )
+from schema.modulo3_schema import (
+    CajaDiaOut,
+    EstadoMensualidadPlacaOut,
+    PagoAnularSchema,
+    PagoCrearSchema,
+    PagoModulo3Out,
+    ReporteRecaudoOut,
+    TarifaCrearSchema,
+    TarifasModulo3Out,
+    VencimientoItemOut,
+)
 from schema.tarifa_schema import TarifaOut
 from schema.tipos import EstadoEspacio, TipoVehiculo, normalizar_placa
 from schema.tiquete_schema import AnulacionSchema, CambioEspacioSchema, EntradaOut, EntradaSchema, PlacaSchema, TiqueteOut
@@ -50,7 +67,8 @@ tags_metadata = [
     {"name": "Vehículos", "description": "Consulta por placa: usuario, mensualidad y si está dentro."},
     {"name": "Espacios", "description": "Celdas del parqueadero y ocupación."},
     {"name": "Celdas", "description": "Gestión de celdas, mantenimiento y trazabilidad (Módulo 2)."},
-    {"name": "Tarifas", "description": "Valor de la mensualidad por tipo de vehículo."},
+    {"name": "Pagos", "description": "Gestión de pagos de mensualidades, caja del día, vencimientos y reportes (Módulo 3)."},
+    {"name": "Tarifas", "description": "Valor de la mensualidad por tipo de vehículo e historial de cambios."},
     {"name": "Tiquetes", "description": "Registro de entradas y salidas, historial y anulaciones."},
     {"name": "Sistema", "description": "Endpoints de estado del servicio."},
 ]
@@ -60,11 +78,12 @@ logger = logging.getLogger("parqueate")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Ejecuta la migración retrocompatible del Módulo 2 al iniciar el servidor."""
+    """Ejecuta la migración retrocompatible del Módulo 2 y Módulo 3 al iniciar el servidor."""
     try:
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
         try:
             ensure_module2_schema(conn)
+            ensure_module3_schema(conn)
         finally:
             conn.close()
     except Exception as exc:
@@ -131,7 +150,45 @@ def mensaje_alerta(dias_restantes: int) -> str:
 
 
 def get_vigencia(conn, placa: str) -> Optional[dict]:
-    """Vigencia de la mensualidad según el pago más reciente de la placa, o None si no tiene pagos."""
+    """Vigencia de la mensualidad según el pago más reciente de la placa, o None si no tiene pagos.
+    Prioriza `pago_mensualidad` (Módulo 3) si el vehículo tiene registros allí; de lo contrario usa `pago` (Módulo 1)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS total FROM information_schema.tables WHERE table_name = 'pago_mensualidad'"
+        )
+        if cur.fetchone()["total"] > 0:
+            cur.execute("SELECT COUNT(*) AS total FROM pago_mensualidad WHERE placa_vehiculo = %s", (placa,))
+            if cur.fetchone()["total"] > 0:
+                cur.execute(
+                    """
+                    SELECT fecha_inicio_vigencia, fecha_fin_vigencia
+                    FROM pago_mensualidad
+                    WHERE placa_vehiculo = %s AND estado = 'Registrado'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (placa,),
+                )
+                mod3 = cur.fetchone()
+                if not mod3:
+                    return None
+                hoy = hoy_colombia()
+                f_ini = mod3["fecha_inicio_vigencia"]
+                f_fin = mod3["fecha_fin_vigencia"]
+                dias_restantes = (f_fin - hoy).days
+                if dias_restantes < 0:
+                    estado = "Vencida"
+                elif dias_restantes <= 5:
+                    estado = "Por vencer"
+                else:
+                    estado = "Vigente"
+                return {
+                    "fecha_pago": f_ini,
+                    "fecha_vencimiento": f_fin,
+                    "dias_restantes": dias_restantes,
+                    "estado": estado,
+                }
+
     ultimo = PagoConnection(conn).get_ultimo(placa)
     if not ultimo:
         return None
@@ -192,15 +249,29 @@ def get_ocupacion(conn=Depends(get_db)):
 
 @app.get(
     "/api/tarifas",
-    response_model=List[TarifaOut],
+    response_model=TarifasModulo3Out,
     dependencies=[Depends(get_current_active_user)],
     status_code=HTTP_200_OK,
     tags=["Tarifas"],
 )
 def list_tarifas(conn=Depends(get_db)):
-    """RNF-08: el valor se configura en la tabla `tarifa`, sin cambiar el código."""
-    rows = TarifaConnection(conn).list_all()
-    return [TarifaOut.from_row(row) for row in rows]
+    """HU-P10 / RNF-08: retorna las tarifas vigentes de Carro y Moto junto con el historial de cambios."""
+    return Modulo3TarifaConnection(conn).listar_tarifas()
+
+
+@app.post(
+    "/api/tarifas",
+    response_model=TarifasModulo3Out,
+    status_code=HTTP_201_CREATED,
+    tags=["Tarifas"],
+)
+def crear_tarifa_modulo3(
+    datos: TarifaCrearSchema,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
+    conn=Depends(get_db),
+):
+    """HU-P10 / RN-P09 (solo Administrador): registra una nueva tarifa mensual sin alterar pagos pasados."""
+    return Modulo3TarifaConnection(conn).crear_tarifa(datos, usuario_responsable=current_user.nombre)
 
 
 @app.get(
@@ -632,6 +703,137 @@ def eliminar_celda_modulo2(
     return Modulo2CeldaConnection(conn).eliminar_celda(
         codigo, usuario_responsable=current_user.nombre
     )
+
+
+# ==============================================================================
+# ENDPOINTS DEL MÓDULO 3: GESTIÓN DE PAGOS DE MENSUALIDADES (HU-P01 a HU-P12)
+# ==============================================================================
+
+
+@app.get(
+    "/api/pagos/estado/{placa}",
+    response_model=EstadoMensualidadPlacaOut,
+    dependencies=[Depends(get_current_active_user)],
+    status_code=HTTP_200_OK,
+    tags=["Pagos"],
+)
+def consultar_estado_mensualidad_placa(placa: str, conn=Depends(get_db)):
+    """HU-P06: consulta rápida de solo lectura del estado de la mensualidad de una placa para interoperabilidad."""
+    return Modulo3PagoConnection(conn).obtener_estado_placa(placa)
+
+
+@app.get(
+    "/api/pagos/vencimientos",
+    response_model=List[VencimientoItemOut],
+    dependencies=[Depends(get_current_active_user)],
+    status_code=HTTP_200_OK,
+    tags=["Pagos"],
+)
+def listar_vencimientos_modulo3(
+    estado: Optional[str] = Query(None),
+    tipo_vehiculo: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    conn=Depends(get_db),
+):
+    """HU-P08: vehículos activos con mensualidad Por vencer (<= 5 días) o Vencida, ordenados del vencimiento más antiguo al más reciente."""
+    return Modulo3PagoConnection(conn).listar_vencimientos(estado=estado, tipo_vehiculo=tipo_vehiculo, q=q)
+
+
+@app.get(
+    "/api/pagos/caja",
+    response_model=CajaDiaOut,
+    status_code=HTTP_200_OK,
+    tags=["Pagos"],
+)
+def obtener_caja_del_dia_modulo3(
+    operario: Optional[str] = Query(None),
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """HU-P11: resumen de caja del día actual (totales por método de pago, tipo de vehículo, válidos y anulados aparte)."""
+    return Modulo3PagoConnection(conn).obtener_resumen_caja(operario_filtro=operario, current_user=current_user)
+
+
+@app.get(
+    "/api/pagos/reporte",
+    response_model=ReporteRecaudoOut,
+    status_code=HTTP_200_OK,
+    tags=["Pagos"],
+)
+def obtener_reporte_recaudo_modulo3(
+    fecha_inicio: date = Query(...),
+    fecha_fin: date = Query(...),
+    tipo_vehiculo: Optional[str] = Query(None),
+    metodo_pago: Optional[str] = Query(None),
+    operario: Optional[str] = Query(None),
+    current_user: UsuarioOut = Depends(get_current_admin_user),
+    conn=Depends(get_db),
+):
+    """HU-P12 (solo Administrador): reporte de recaudo por rango de fechas con registro en auditoria_reporte."""
+    return Modulo3PagoConnection(conn).obtener_reporte_recaudo(
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+        tipo_vehiculo=tipo_vehiculo,
+        metodo_pago=metodo_pago,
+        operario=operario,
+        usuario_responsable=current_user.nombre,
+    )
+
+
+@app.get(
+    "/api/pagos",
+    response_model=List[PagoModulo3Out],
+    dependencies=[Depends(get_current_active_user)],
+    status_code=HTTP_200_OK,
+    tags=["Pagos"],
+)
+def listar_pagos_modulo3(
+    q: Optional[str] = Query(None),
+    fecha_desde: Optional[date] = Query(None),
+    fecha_hasta: Optional[date] = Query(None),
+    metodo_pago: Optional[str] = Query(None),
+    estado: Optional[str] = Query(None),
+    conn=Depends(get_db),
+):
+    """HU-P07: historial general de pagos ordenado del más reciente al más antiguo con filtros opcionales."""
+    return Modulo3PagoConnection(conn).listar_pagos(
+        q=q,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        metodo_pago=metodo_pago,
+        estado=estado,
+    )
+
+
+@app.post(
+    "/api/pagos",
+    response_model=PagoModulo3Out,
+    status_code=HTTP_201_CREATED,
+    tags=["Pagos"],
+)
+def registrar_pago_modulo3(
+    datos: PagoCrearSchema,
+    current_user: UsuarioOut = Depends(get_current_active_user),
+    conn=Depends(get_db),
+):
+    """HU-P02, HU-P03, RN-P01 a RN-P05, RN-P08, RN-P10: registra un pago de mensualidad y emite comprobante REC-XXXX."""
+    return Modulo3PagoConnection(conn).registrar_pago(datos, operario_registro=current_user.nombre)
+
+
+@app.patch(
+    "/api/pagos/{id_pago:int}/anular",
+    response_model=PagoModulo3Out,
+    status_code=HTTP_200_OK,
+    tags=["Pagos"],
+)
+def anular_pago_modulo3(
+    id_pago: int,
+    datos: PagoAnularSchema,
+    current_user: UsuarioOut = Depends(get_current_admin_user),
+    conn=Depends(get_db),
+):
+    """HU-P09, RN-P06, RN-P07 (solo Administrador): anula el último pago no anulado de un vehículo y revierte su vigencia."""
+    return Modulo3PagoConnection(conn).anular_pago(id_pago, datos, usuario_anulacion=current_user.nombre)
 
 
 if __name__ == "__main__":

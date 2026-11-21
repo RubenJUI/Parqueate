@@ -1,15 +1,17 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useState } from 'react'
 import {
   addModule2Vehicle,
+  annulModule3Payment,
   annulTicket,
   ApiError,
   buildInitialCells,
-  buildSeedPaymentsFromUsers,
   calculatePaymentPeriod,
   checkHealth,
   convertModule2Cell,
   createModule2Cell,
   createModule2User,
+  createModule3Payment,
+  createModule3Tariff,
   deleteModule2Cell,
   deleteModule2User,
   deleteModule2Vehicle,
@@ -21,6 +23,11 @@ import {
   getMe,
   getModule2Cells,
   getModule2Users,
+  getModule3Cashbox,
+  getModule3Expiring,
+  getModule3Payments,
+  getModule3Report,
+  getModule3Tariffs,
   getOccupancy,
   getToken,
   getVehicleSubscriptionInfo,
@@ -185,20 +192,6 @@ export default function App() {
   }, [tariffs])
 
   useEffect(() => {
-    if (users.length === 0 || payments.length > 0) return
-    try {
-      if (localStorage.getItem('parqueate.module3.seeded') === '1') return
-      const seeded = buildSeedPaymentsFromUsers(users, tariffs)
-      if (seeded.length > 0) {
-        setPayments(seeded)
-        localStorage.setItem('parqueate.module3.seeded', '1')
-      }
-    } catch {
-      // Ignorar si localStorage no está disponible
-    }
-  }, [users, payments.length, tariffs])
-
-  useEffect(() => {
     setUnauthorizedHandler(() => setUser(null))
     if (!getToken()) return
     getMe().then(setUser).catch(() => logout()).finally(() => setCheckingSession(false))
@@ -266,6 +259,8 @@ function Operations({
   const refreshOperationalState = useCallback(() => {
     getOccupancy().then(setOccupancy).catch(() => {})
     getModule2Users().then(setUsers).catch(() => {})
+    getModule3Payments().then(setPayments).catch(() => {})
+    getModule3Tariffs().then(setTariffs).catch(() => {})
     Promise.all([getInside(), getModule2Cells().catch(() => null)])
       .then(([tickets, apiCells]) => {
         setOpenTickets(tickets)
@@ -276,7 +271,7 @@ function Operations({
         }
       })
       .catch(() => {})
-  }, [setCells, setUsers])
+  }, [setCells, setPayments, setTariffs, setUsers])
 
   // RF-10: ocupación y tiquetes abiertos en tiempo real; se actualizan tras cada movimiento y cada 15 segundos.
   useEffect(() => {
@@ -2180,6 +2175,17 @@ function PaymentsModule({
   const [annulError, setAnnulError] = useState('')
   const [cashboxPrintOpen, setCashboxPrintOpen] = useState(false)
 
+  // Sincroniza pagos, tarifas, caja y vencimientos desde el backend FastAPI al cambiar de sub-vista
+  useEffect(() => {
+    getModule3Payments().then(setPayments).catch(() => {})
+    getModule3Tariffs().then(setTariffs).catch(() => {})
+    if (subView === 'expiring') {
+      getModule3Expiring().catch(() => {})
+    } else if (subView === 'history') {
+      getModule3Cashbox(cashboxOperatorFilter).catch(() => {})
+    }
+  }, [subView, cashboxOperatorFilter, setPayments, setTariffs])
+
   // Sincroniza selección inicial cuando llegan usuarios
   useEffect(() => {
     if (users.length === 0) return
@@ -2271,7 +2277,7 @@ function PaymentsModule({
     return ''
   })()
 
-  const handleConfirmPayment = () => {
+  const handleConfirmPayment = async () => {
     if (submittingPayment || !selectedUser || !selectedVehicle || !selectedSubInfo || !calculatedPeriod) return
     setChargeError('')
 
@@ -2294,44 +2300,23 @@ function PaymentsModule({
 
     setSubmittingPayment(true)
     try {
-      const nextId = payments.reduce((max, p) => Math.max(max, p.id), 0) + 1
-      const consecutivo = `REC-${String(nextId).padStart(4, '0')}`
-      const newPayment: PaymentRecord = {
-        id: nextId,
-        consecutivo,
-        userId: selectedUser.id,
-        documentoTipo: selectedUser.documentoTipo,
-        documento: selectedUser.documento,
-        nombreTitular: `${selectedUser.nombres} ${selectedUser.apellidos}`.trim(),
-        celularTitular: selectedUser.celular,
+      const createdPayment = await createModule3Payment({
         placa: selectedVehicle.placa.toUpperCase(),
-        tipoVehiculo: selectedVehicle.tipo,
-        marcaVehiculo: selectedVehicle.marca,
-        colorVehiculo: selectedVehicle.color,
-        meses: monthsToPay,
-        tarifaMensualAplicada: applicableTariff,
-        totalPagado: totalToPay,
-        fechaInicio: calculatedPeriod.fechaInicio,
-        fechaVencimiento: calculatedPeriod.fechaVencimiento,
-        fechaVencimientoAnterior: selectedSubInfo.fechaVencimiento,
-        formaPago: paymentMethod,
-        valorRecibidoEfectivo: paymentMethod === 'Efectivo' ? parsedCashReceived : null,
-        cambioDevueltoEfectivo: paymentMethod === 'Efectivo' ? cashChange : null,
-        referenciaPago: paymentMethod !== 'Efectivo' ? paymentReference.trim().toUpperCase() : null,
-        fechaHoraPago: new Date().toISOString(),
-        operario: currentOperatorName,
-        estado: 'Registrado',
-        motivoAnulacion: null,
-        usuarioAnulacion: null,
-        fechaHoraAnulacion: null,
-      }
+        meses_pagados: monthsToPay,
+        metodo_pago: paymentMethod,
+        valor_recibido_cop: paymentMethod === 'Efectivo' ? parsedCashReceived : null,
+        referencia_pago: paymentMethod !== 'Efectivo' ? paymentReference.trim().toUpperCase() : null,
+      })
 
-      setPayments((prev) => [newPayment, ...prev])
+      const freshList = await getModule3Payments().catch(() => [createdPayment, ...payments])
+      setPayments(freshList)
       setCashReceivedInput('')
       setPaymentReference('')
       setMonthsToPay(1)
-      setReceiptModal({ payment: newPayment, isCopy: false })
-      onNotify(`Pago ${consecutivo} registrado · ${newPayment.placa} al día hasta el ${formatDate(newPayment.fechaVencimiento)}`)
+      setReceiptModal({ payment: createdPayment, isCopy: false })
+      onNotify(`Pago ${createdPayment.consecutivo} registrado · ${createdPayment.placa} al día hasta el ${formatDate(createdPayment.fechaVencimiento)}`)
+    } catch (err) {
+      setChargeError(errorMessage(err))
     } finally {
       setSubmittingPayment(false)
     }
@@ -2340,13 +2325,14 @@ function PaymentsModule({
   // Determina si un pago es el último pago no anulado de ese vehículo (RN-P07)
   const isLatestActivePaymentForPlate = (payment: PaymentRecord): boolean => {
     if (payment.estado !== 'Registrado') return false
+    if (typeof payment.esUltimoActivo === 'boolean') return payment.esUltimoActivo
     const activeForPlate = payments
       .filter((p) => p.placa.toUpperCase() === payment.placa.toUpperCase() && p.estado === 'Registrado')
       .sort((a, b) => b.id - a.id)
     return activeForPlate[0]?.id === payment.id
   }
 
-  const handleConfirmAnnulPayment = () => {
+  const handleConfirmAnnulPayment = async () => {
     if (!annulModalPayment) return
     if (!isAdmin) {
       setAnnulError('Solo el Administrador puede anular pagos registrados.')
@@ -2362,24 +2348,19 @@ function PaymentsModule({
       return
     }
 
-    const nowIso = new Date().toISOString()
-    setPayments((prev) =>
-      prev.map((p) =>
-        p.id === annulModalPayment.id
-          ? {
-              ...p,
-              estado: 'Anulado',
-              motivoAnulacion: reason,
-              usuarioAnulacion: currentOperatorName,
-              fechaHoraAnulacion: nowIso,
-            }
-          : p,
-      ),
-    )
-    onNotify(`Comprobante ${annulModalPayment.consecutivo} (${annulModalPayment.placa}) anulado y vigencia revertida`)
-    setAnnulModalPayment(null)
-    setAnnulReason('')
-    setAnnulError('')
+    try {
+      const annulled = await annulModule3Payment(annulModalPayment.id, reason)
+      const freshList = await getModule3Payments().catch(() =>
+        payments.map((p) => (p.id === annulled.id ? annulled : p)),
+      )
+      setPayments(freshList)
+      onNotify(`Comprobante ${annulled.consecutivo} (${annulled.placa}) anulado y vigencia revertida`)
+      setAnnulModalPayment(null)
+      setAnnulReason('')
+      setAnnulError('')
+    } catch (err) {
+      setAnnulError(errorMessage(err))
+    }
   }
 
   // Lista de operadores disponibles para filtros
@@ -3144,7 +3125,7 @@ function PaymentsModule({
   )
 
   // Lógica de Sub-vista 4: Cambio de tarifa (HU-P10) y Reporte de Recaudo (HU-P12)
-  const handleSaveTariffChange = (e: FormEvent) => {
+  const handleSaveTariffChange = async (e: FormEvent) => {
     e.preventDefault()
     setTariffError('')
     setTariffSuccess('')
@@ -3166,28 +3147,20 @@ function PaymentsModule({
       return
     }
 
-    const currentVal = tariffForm.tipo === 'Carro' ? effectiveCarTariff : effectiveMotoTariff
-    const nextId = tariffs.historial.reduce((max, h) => Math.max(max, h.id), 0) + 1
-    const newEntry = {
-      id: nextId,
-      tipo: tariffForm.tipo,
-      valorAnterior: currentVal,
-      valorNuevo: cleanValue,
-      fechaInicioVigencia: tariffForm.fechaInicio,
-      motivo: tariffForm.motivo.trim(),
-      usuarioResponsable: currentOperatorName,
-      fechaRegistro: new Date().toISOString(),
+    try {
+      const updatedTariffs = await createModule3Tariff({
+        tipo_vehiculo: tariffForm.tipo,
+        valor_cop: cleanValue,
+        fecha_inicio: tariffForm.fechaInicio,
+        motivo: tariffForm.motivo.trim(),
+      })
+      setTariffs(updatedTariffs)
+      setTariffForm((prev) => ({ ...prev, nuevoValor: '', motivo: '' }))
+      setTariffSuccess(`Tarifa de ${tariffForm.tipo} actualizada a ${formatCOP(cleanValue)} con vigencia desde ${formatDate(tariffForm.fechaInicio)}.`)
+      onNotify(`Tarifa de ${tariffForm.tipo} registrada: ${formatCOP(cleanValue)}`)
+    } catch (err) {
+      setTariffError(errorMessage(err))
     }
-
-    setTariffs((prev) => ({
-      ...prev,
-      Carro: tariffForm.tipo === 'Carro' && tariffForm.fechaInicio <= todayYMD ? cleanValue : prev.Carro,
-      Moto: tariffForm.tipo === 'Moto' && tariffForm.fechaInicio <= todayYMD ? cleanValue : prev.Moto,
-      historial: [newEntry, ...prev.historial],
-    }))
-    setTariffForm((prev) => ({ ...prev, nuevoValor: '', motivo: '' }))
-    setTariffSuccess(`Tarifa de ${tariffForm.tipo} actualizada a ${formatCOP(cleanValue)} con vigencia desde ${formatDate(tariffForm.fechaInicio)}.`)
-    onNotify(`Tarifa de ${tariffForm.tipo} registrada: ${formatCOP(cleanValue)}`)
   }
 
   // Validación y datos del Reporte de Recaudo (HU-P12)
@@ -3197,6 +3170,18 @@ function PaymentsModule({
     if (reportHasta > todayYMD || reportDesde > todayYMD) return 'Las fechas del reporte no pueden ser futuras.'
     return ''
   })()
+
+  // Registra la generación del reporte en auditoria_reporte del backend cuando el Administrador consulta el reporte
+  useEffect(() => {
+    if (subView !== 'tariffs' || !isAdmin || reportDateError) return
+    getModule3Report({
+      fecha_inicio: reportDesde,
+      fecha_fin: reportHasta,
+      tipo_vehiculo: reportTypeFilter,
+      metodo_pago: reportMethodFilter,
+      operario: reportOperatorFilter,
+    }).catch(() => {})
+  }, [subView, isAdmin, reportDateError, reportDesde, reportHasta, reportTypeFilter, reportMethodFilter, reportOperatorFilter])
 
   const reportPayments = payments.filter((p) => {
     if (reportDateError) return false
