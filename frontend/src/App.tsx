@@ -335,9 +335,6 @@ function Operations({
         totalInside={totalInside}
         cells={cells}
         onSelectVehicleType={openCellsMapForType}
-        paymentsSubView={paymentsSubView}
-        setPaymentsSubView={setPaymentsSubView}
-        expiringCount={expiringOrExpiredCount}
       />
       {fullTypes.length > 0 && <div className="capacity-alert notice-red"><Icon name="alert" size={17} /><span><strong>Sin celdas libres de {fullTypes.map(t => t === 'Carro' ? 'carro' : 'moto').join(' ni de ')}.</strong> {user.rol === 'Administrador' ? 'Con el cupo garantizado esto indica un error de datos: revisa las celdas fuera de servicio y las mensualidades vigentes.' : 'Avisa al administrador.'}</span></div>}
       <div className="content">
@@ -374,6 +371,7 @@ function Operations({
             setTariffs={setTariffs}
             subView={paymentsSubView}
             setSubView={setPaymentsSubView}
+            expiringCount={expiringOrExpiredCount}
             onNotify={notify}
           />
         )}
@@ -469,18 +467,12 @@ function OperationsHeader({
   totalInside,
   cells,
   onSelectVehicleType,
-  paymentsSubView,
-  setPaymentsSubView,
-  expiringCount = 0,
 }: {
   tab: ActiveTab
   setTab: (t: ActiveTab) => void
   totalInside: number
   cells: CellRecord[]
   onSelectVehicleType: (tipo: VehicleType) => void
-  paymentsSubView?: PaymentsSubView
-  setPaymentsSubView?: (v: PaymentsSubView) => void
-  expiringCount?: number
 }) {
   const pageTitle = tab === 'console' ? '¿Qué vehículo quieres registrar?' : tab === 'inside' ? 'Vehículos dentro' : tab === 'history' ? 'Historial y trazabilidad' : tab === 'users' ? 'Usuarios y celdas' : 'Pagos y mensualidades'
   const pageSubtitle = tab === 'console' ? 'Valida una placa y completa el movimiento en segundos.' : tab === 'inside' || tab === 'history' ? 'Consulta la operación sin salir de la estación.' : tab === 'users' ? 'Gestiona acceso, usuarios y disponibilidad del parqueadero.' : 'Administra pagos, vigencias y recordatorios del servicio.'
@@ -528,7 +520,7 @@ function OperationsHeader({
     </div>
   )
 
-  if (tab === 'users') {
+  if (tab === 'users' || tab === 'payments') {
     return (
       <>
         {renderOccupancyHud()}
@@ -537,52 +529,6 @@ function OperationsHeader({
             <div><span className="eyebrow">ESTACIÓN DE ACCESO · MEDELLÍN</span><h1>{pageTitle}</h1><p>{pageSubtitle}</p></div>
             <div className="date-chip"><Icon name="clock" size={16} /><span><small>HOY</small>{todayLong()}</span></div>
           </div>
-        </div>
-      </>
-    )
-  }
-
-  if (tab === 'payments') {
-    return (
-      <>
-        {renderOccupancyHud()}
-        <div className="page-head spotlight-head compact">
-          <div className="title-row">
-            <div><span className="eyebrow">ESTACIÓN DE ACCESO · MEDELLÍN</span><h1>{pageTitle}</h1><p>{pageSubtitle}</p></div>
-            <div className="date-chip"><Icon name="clock" size={16} /><span><small>HOY</small>{todayLong()}</span></div>
-          </div>
-          {paymentsSubView && setPaymentsSubView && (
-            <div className="module-subnav" role="tablist" aria-label="Sub-vistas del módulo de pagos" style={{ marginTop: '28px', marginBottom: 0 }}>
-              <button
-                type="button"
-                className={paymentsSubView === 'charge' ? 'active' : ''}
-                onClick={() => setPaymentsSubView('charge')}
-              >
-                <Icon name="card" size={16} />Cobrar Mensualidad
-              </button>
-              <button
-                type="button"
-                className={paymentsSubView === 'expiring' ? 'active' : ''}
-                onClick={() => setPaymentsSubView('expiring')}
-              >
-                <Icon name="alert" size={16} />Por Vencer y Vencidas {expiringCount > 0 && <span className="badge-warn">{expiringCount}</span>}
-              </button>
-              <button
-                type="button"
-                className={paymentsSubView === 'history' ? 'active' : ''}
-                onClick={() => setPaymentsSubView('history')}
-              >
-                <Icon name="receipt" size={16} />Historial y Caja del Día
-              </button>
-              <button
-                type="button"
-                className={paymentsSubView === 'tariffs' ? 'active' : ''}
-                onClick={() => setPaymentsSubView('tariffs')}
-              >
-                <Icon name="dollar" size={16} />Tarifas y Recaudo
-              </button>
-            </div>
-          )}
         </div>
       </>
     )
@@ -2099,6 +2045,7 @@ function PaymentsModule({
   setTariffs,
   subView,
   setSubView,
+  expiringCount,
   onNotify,
 }: {
   roleMode: 'Operario' | 'Administrador'
@@ -2111,20 +2058,19 @@ function PaymentsModule({
   setTariffs: React.Dispatch<React.SetStateAction<TariffsState>>
   subView: PaymentsSubView
   setSubView: React.Dispatch<React.SetStateAction<PaymentsSubView>>
+  expiringCount: number
   onNotify: (msg: string) => void
 }) {
   const isAdmin = user.rol === 'Administrador' && roleMode === 'Administrador'
   const currentOperatorName = user.nombre || (isAdmin ? 'Administrador' : 'Operario')
   const todayYMD = todayColombiaYMD()
 
-  // Estado de Sub-vista 1: Cobrar Mensualidad
+  // Estado de Sub-vista 1: Cobrar Mensualidad (exclusivamente en Efectivo)
   const [chargeSearch, setChargeSearch] = useState('')
   const [selectedUserId, setSelectedUserId] = useState<number | null>(() => users[0]?.id ?? null)
   const [selectedPlate, setSelectedPlate] = useState<string>(() => users[0]?.vehiculos[0]?.placa ?? '')
   const [monthsToPay, setMonthsToPay] = useState<1 | 2 | 3>(1)
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Efectivo')
   const [cashReceivedInput, setCashReceivedInput] = useState('')
-  const [paymentReference, setPaymentReference] = useState('')
   const [chargeError, setChargeError] = useState('')
   const [submittingPayment, setSubmittingPayment] = useState(false)
 
@@ -2138,7 +2084,6 @@ function PaymentsModule({
   const [historySearch, setHistorySearch] = useState('')
   const [historyDesde, setHistoryDesde] = useState('')
   const [historyHasta, setHistoryHasta] = useState('')
-  const [historyMethodFilter, setHistoryMethodFilter] = useState<'Todas' | PaymentMethod>('Todas')
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'Todos' | PaymentStatus>('Todos')
 
   // Estado de Sub-vista 4: Tarifas y Recaudo
@@ -2162,7 +2107,6 @@ function PaymentsModule({
   })
   const [reportHasta, setReportHasta] = useState(todayYMD)
   const [reportTypeFilter, setReportTypeFilter] = useState<'Todos' | VehicleType>('Todos')
-  const [reportMethodFilter, setReportMethodFilter] = useState<'Todas' | PaymentMethod>('Todas')
   const [reportOperatorFilter, setReportOperatorFilter] = useState<string>('Todos')
 
   // Modales: Comprobante (HU-P04), Anulación (HU-P09) y Cierre de Caja Imprimible (HU-P11)
@@ -2186,15 +2130,18 @@ function PaymentsModule({
     }
   }, [subView, cashboxOperatorFilter, setPayments, setTariffs])
 
-  // Sincroniza selección inicial cuando llegan usuarios
+  // Sincroniza selección inicial cuando llegan usuarios (sin disparar re-renders innecesarios)
   useEffect(() => {
     if (users.length === 0) return
     const current = users.find((u) => u.id === selectedUserId)
     if (!current) {
-      setSelectedUserId(users[0].id)
-      setSelectedPlate(users[0].vehiculos[0]?.placa ?? '')
+      const nextId = users[0].id
+      const nextPlate = users[0].vehiculos[0]?.placa ?? ''
+      if (selectedUserId !== nextId) setSelectedUserId(nextId)
+      if (selectedPlate !== nextPlate) setSelectedPlate(nextPlate)
     } else if (!current.vehiculos.some((v) => v.placa === selectedPlate)) {
-      setSelectedPlate(current.vehiculos[0]?.placa ?? '')
+      const nextPlate = current.vehiculos[0]?.placa ?? ''
+      if (selectedPlate !== nextPlate) setSelectedPlate(nextPlate)
     }
   }, [users, selectedUserId, selectedPlate])
 
@@ -2286,16 +2233,9 @@ function PaymentsModule({
       return
     }
 
-    if (paymentMethod === 'Efectivo') {
-      if (parsedCashReceived < totalToPay) {
-        setChargeError(`El valor recibido en efectivo (${formatCOP(parsedCashReceived)}) es menor al total a pagar (${formatCOP(totalToPay)}).`)
-        return
-      }
-    } else {
-      if (!paymentReference.trim()) {
-        setChargeError(`Debes ingresar el número de referencia o aprobación para pagos con ${paymentMethod.toLowerCase()} (RN-P10).`)
-        return
-      }
+    if (parsedCashReceived < totalToPay) {
+      setChargeError(`El valor recibido en efectivo (${formatCOP(parsedCashReceived)}) es menor al total a pagar (${formatCOP(totalToPay)}).`)
+      return
     }
 
     setSubmittingPayment(true)
@@ -2303,15 +2243,14 @@ function PaymentsModule({
       const createdPayment = await createModule3Payment({
         placa: selectedVehicle.placa.toUpperCase(),
         meses_pagados: monthsToPay,
-        metodo_pago: paymentMethod,
-        valor_recibido_cop: paymentMethod === 'Efectivo' ? parsedCashReceived : null,
-        referencia_pago: paymentMethod !== 'Efectivo' ? paymentReference.trim().toUpperCase() : null,
+        metodo_pago: 'Efectivo',
+        valor_recibido_cop: parsedCashReceived,
+        referencia_pago: null,
       })
 
       const freshList = await getModule3Payments().catch(() => [createdPayment, ...payments])
       setPayments(freshList)
       setCashReceivedInput('')
-      setPaymentReference('')
       setMonthsToPay(1)
       setReceiptModal({ payment: createdPayment, isCopy: false })
       onNotify(`Pago ${createdPayment.consecutivo} registrado · ${createdPayment.placa} al día hasta el ${formatDate(createdPayment.fechaVencimiento)}`)
@@ -2599,83 +2538,57 @@ function PaymentsModule({
               <div className="field">
                 <label>Forma de pago</label>
                 <div className="segmented pills-inline">
-                  {(['Efectivo', 'Transferencia', 'Tarjeta'] as const).map((method) => (
-                    <button
-                      key={method}
-                      type="button"
-                      className={paymentMethod === method ? 'active' : ''}
-                      onClick={() => {
-                        setPaymentMethod(method)
-                        setChargeError('')
-                      }}
-                    >
-                      {method}
-                    </button>
-                  ))}
+                  <button type="button" className="active">
+                    Efectivo
+                  </button>
                 </div>
               </div>
 
-              {paymentMethod === 'Efectivo' ? (
-                <>
-                  <div className="field">
-                    <label>Valor recibido en efectivo (COP)</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={cashReceivedInput ? Number(cashReceivedInput.replace(/[^0-9]/g, '')).toLocaleString('es-CO') : ''}
-                      onChange={(e) => {
-                        const digits = e.target.value.replace(/[^0-9]/g, '')
-                        setCashReceivedInput(digits)
-                        setChargeError('')
-                      }}
-                      placeholder={`Mínimo ${totalToPay.toLocaleString('es-CO')}`}
-                    />
-                    <div className="quick-cash-pills">
-                      <button
-                        type="button"
-                        className="quick-cash-pill"
-                        onClick={() => setCashReceivedInput(String(totalToPay))}
-                      >
-                        Exacto ({formatCOP(totalToPay)})
-                      </button>
-                      <button
-                        type="button"
-                        className="quick-cash-pill"
-                        onClick={() => setCashReceivedInput(String(Math.ceil((totalToPay + 10000) / 10000) * 10000))}
-                      >
-                        {formatCOP(Math.ceil((totalToPay + 10000) / 10000) * 10000)}
-                      </button>
-                      <button
-                        type="button"
-                        className="quick-cash-pill"
-                        onClick={() => setCashReceivedInput(String(Math.ceil((totalToPay + 50000) / 50000) * 50000))}
-                      >
-                        {formatCOP(Math.ceil((totalToPay + 50000) / 50000) * 50000)}
-                      </button>
-                    </div>
-                  </div>
-                  <div className={`cash-change-box ${parsedCashReceived < totalToPay ? 'insufficient' : ''}`}>
-                    <span>{parsedCashReceived < totalToPay ? 'Faltante por cubrir' : 'Cambio a devolver al cliente'}</span>
-                    <strong>
-                      {parsedCashReceived < totalToPay
-                        ? formatCOP(totalToPay - parsedCashReceived)
-                        : formatCOP(cashChange)}
-                    </strong>
-                  </div>
-                </>
-              ) : (
-                <div className="field">
-                  <label>Número de referencia / aprobación ({paymentMethod}) · Obligatorio</label>
-                  <input
-                    value={paymentReference}
-                    onChange={(e) => {
-                      setPaymentReference(e.target.value.toUpperCase())
-                      setChargeError('')
-                    }}
-                    placeholder={paymentMethod === 'Transferencia' ? 'Ej. TRX-908412 / Bancolombia' : 'Ej. APR-551902'}
-                  />
+              <div className="field">
+                <label>Valor recibido en efectivo (COP)</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={cashReceivedInput ? Number(cashReceivedInput.replace(/[^0-9]/g, '')).toLocaleString('es-CO') : ''}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/[^0-9]/g, '')
+                    setCashReceivedInput(digits)
+                    setChargeError('')
+                  }}
+                  placeholder={`Mínimo ${totalToPay.toLocaleString('es-CO')}`}
+                />
+                <div className="quick-cash-pills">
+                  <button
+                    type="button"
+                    className="quick-cash-pill"
+                    onClick={() => setCashReceivedInput(String(totalToPay))}
+                  >
+                    Exacto ({formatCOP(totalToPay)})
+                  </button>
+                  <button
+                    type="button"
+                    className="quick-cash-pill"
+                    onClick={() => setCashReceivedInput(String(Math.ceil((totalToPay + 10000) / 10000) * 10000))}
+                  >
+                    {formatCOP(Math.ceil((totalToPay + 10000) / 10000) * 10000)}
+                  </button>
+                  <button
+                    type="button"
+                    className="quick-cash-pill"
+                    onClick={() => setCashReceivedInput(String(Math.ceil((totalToPay + 50000) / 50000) * 50000))}
+                  >
+                    {formatCOP(Math.ceil((totalToPay + 50000) / 50000) * 50000)}
+                  </button>
                 </div>
-              )}
+              </div>
+              <div className={`cash-change-box ${parsedCashReceived < totalToPay ? 'insufficient' : ''}`}>
+                <span>{parsedCashReceived < totalToPay ? 'Faltante por cubrir' : 'Cambio a devolver al cliente'}</span>
+                <strong>
+                  {parsedCashReceived < totalToPay
+                    ? formatCOP(totalToPay - parsedCashReceived)
+                    : formatCOP(cashChange)}
+                </strong>
+              </div>
 
               {chargeError && (
                 <div className="notice notice-red">
@@ -2872,10 +2785,6 @@ function PaymentsModule({
   const todayTotalCollected = todayValidPayments.reduce((acc, p) => acc + p.totalPagado, 0)
   const todayTotalAnnulled = todayAnnulledPayments.reduce((acc, p) => acc + p.totalPagado, 0)
 
-  const todayByMethod = (method: PaymentMethod) => {
-    const items = todayValidPayments.filter((p) => p.formaPago === method)
-    return { count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
-  }
   const todayByType = (tipo: VehicleType) => {
     const items = todayValidPayments.filter((p) => p.tipoVehiculo === tipo)
     return { count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
@@ -2886,11 +2795,10 @@ function PaymentsModule({
       const payDay = isoToColombiaYMD(p.fechaHoraPago)
       if (historyDesde && payDay < historyDesde) return false
       if (historyHasta && payDay > historyHasta) return false
-      if (historyMethodFilter !== 'Todas' && p.formaPago !== historyMethodFilter) return false
       if (historyStatusFilter !== 'Todos' && p.estado !== historyStatusFilter) return false
       if (historySearch.trim()) {
         const q = historySearch.trim().toLowerCase()
-        const hay = `${p.consecutivo} ${p.documentoTipo} ${p.documento} ${p.nombreTitular} ${p.placa} ${p.operario} ${p.referenciaPago ?? ''}`.toLowerCase()
+        const hay = `${p.consecutivo} ${p.documentoTipo} ${p.documento} ${p.nombreTitular} ${p.placa} ${p.operario}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
@@ -2936,11 +2844,9 @@ function PaymentsModule({
           <small>{todayValidPayments.length} {todayValidPayments.length === 1 ? 'pago válido registrado' : 'pagos válidos registrados'}</small>
         </div>
         <div className="kpi-card">
-          <span>Por forma de pago</span>
-          <strong>Efectivo: {formatCOP(todayByMethod('Efectivo').total)}</strong>
-          <small>
-            Transferencia: {formatCOP(todayByMethod('Transferencia').total)} ({todayByMethod('Transferencia').count}) · Tarjeta: {formatCOP(todayByMethod('Tarjeta').total)} ({todayByMethod('Tarjeta').count})
-          </small>
+          <span>Forma de pago</span>
+          <strong>Efectivo: {formatCOP(todayTotalCollected)}</strong>
+          <small>{todayValidPayments.length} {todayValidPayments.length === 1 ? 'cobro en efectivo' : 'cobros en efectivo'} en caja</small>
         </div>
         <div className="kpi-card">
           <span>Por tipo de vehículo</span>
@@ -2961,7 +2867,7 @@ function PaymentsModule({
         <div>
           <h2>Historial general de pagos</h2>
           <p className="detail-hint">
-            Registro inalterable de mensualidades (ningún pago se edita ni se elimina). Ordenado del más reciente al más antiguo.
+            Registro inalterable de mensualidades en efectivo (ningún pago se edita ni se elimina). Ordenado del más reciente al más antiguo.
           </p>
         </div>
       </div>
@@ -2993,36 +2899,19 @@ function PaymentsModule({
             style={{ height: '38px', padding: '0 10px', borderRadius: '10px', border: '1px solid #CBD5E1' }}
           />
         </div>
-        <div className="filter-stack">
-          <div className="filter-group">
-            <span>Forma de pago</span>
-            <div className="filter-pills">
-              {(['Todas', 'Efectivo', 'Transferencia', 'Tarjeta'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`filter-pill ${historyMethodFilter === m ? 'active' : ''}`}
-                  onClick={() => setHistoryMethodFilter(m)}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="filter-group">
-            <span>Estado</span>
-            <div className="filter-pills">
-              {(['Todos', 'Registrado', 'Anulado'] as const).map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  className={`filter-pill ${historyStatusFilter === st ? 'active' : ''}`}
-                  onClick={() => setHistoryStatusFilter(st)}
-                >
-                  {st}
-                </button>
-              ))}
-            </div>
+        <div className="filter-group">
+          <span>Estado</span>
+          <div className="filter-pills">
+            {(['Todos', 'Registrado', 'Anulado'] as const).map((st) => (
+              <button
+                key={st}
+                type="button"
+                className={`filter-pill ${historyStatusFilter === st ? 'active' : ''}`}
+                onClick={() => setHistoryStatusFilter(st)}
+              >
+                {st}
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -3071,8 +2960,7 @@ function PaymentsModule({
                       <small style={{ display: 'block', color: '#64748B' }}>{p.meses} {p.meses === 1 ? 'mes (30 días)' : `meses (${p.meses * 30} días)`}</small>
                     </td>
                     <td>
-                      <strong>{p.formaPago}</strong>
-                      {p.referenciaPago && <small style={{ display: 'block', color: '#64748B' }}>Ref: {p.referenciaPago}</small>}
+                      <strong>Efectivo</strong>
                     </td>
                     <td><strong>{formatCOP(p.totalPagado)}</strong></td>
                     <td>{p.operario}</td>
@@ -3178,17 +3066,15 @@ function PaymentsModule({
       fecha_inicio: reportDesde,
       fecha_fin: reportHasta,
       tipo_vehiculo: reportTypeFilter,
-      metodo_pago: reportMethodFilter,
       operario: reportOperatorFilter,
     }).catch(() => {})
-  }, [subView, isAdmin, reportDateError, reportDesde, reportHasta, reportTypeFilter, reportMethodFilter, reportOperatorFilter])
+  }, [subView, isAdmin, reportDateError, reportDesde, reportHasta, reportTypeFilter, reportOperatorFilter])
 
   const reportPayments = payments.filter((p) => {
     if (reportDateError) return false
     const day = isoToColombiaYMD(p.fechaHoraPago)
     if (day < reportDesde || day > reportHasta) return false
     if (reportTypeFilter !== 'Todos' && p.tipoVehiculo !== reportTypeFilter) return false
-    if (reportMethodFilter !== 'Todas' && p.formaPago !== reportMethodFilter) return false
     if (reportOperatorFilter !== 'Todos' && p.operario !== reportOperatorFilter) return false
     return true
   })
@@ -3213,10 +3099,13 @@ function PaymentsModule({
     return { tipo, count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
   })
 
-  const summaryByMethod = (['Efectivo', 'Transferencia', 'Tarjeta'] as const).map((forma) => {
-    const items = reportValidPayments.filter((p) => p.formaPago === forma)
-    return { forma, count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
-  })
+  const summaryByMethod = [
+    {
+      forma: 'Efectivo' as const,
+      count: reportValidPayments.length,
+      total: reportTotalCollected,
+    },
+  ]
 
   const summaryByOperator = (() => {
     const map = new Map<string, { count: number; total: number }>()
@@ -3232,7 +3121,7 @@ function PaymentsModule({
     const lines: string[] = [
       'REPORTE DE RECAUDO - PARQUEADERO AUTOS COLOMBIA (MEDELLIN)',
       `Periodo;${reportDesde};a;${reportHasta}`,
-      `Total recaudado (COP);${reportTotalCollected};Pagos validos;${reportValidPayments.length};Pagos anulados (aparte);${reportAnnulledPayments.length}`,
+      `Total recaudado en Efectivo (COP);${reportTotalCollected};Pagos validos;${reportValidPayments.length};Pagos anulados (aparte);${reportAnnulledPayments.length}`,
       '',
       'RESUMEN POR TIPO DE VEHICULO',
       'Tipo;Cantidad de pagos;Total recaudado (COP)',
@@ -3247,7 +3136,7 @@ function PaymentsModule({
       ...summaryByOperator.map(([op, r]) => `${op};${r.count};${r.total}`),
       '',
       'DETALLE DE PAGOS DEL PERIODO',
-      'Consecutivo;Fecha y Hora;Documento;Titular;Placa;Tipo;Meses;Inicio Vigencia;Fin Vigencia;Forma de Pago;Referencia;Total (COP);Operario;Estado;Motivo Anulacion',
+      'Consecutivo;Fecha y Hora;Documento;Titular;Placa;Tipo;Meses;Inicio Vigencia;Fin Vigencia;Forma de Pago;Total (COP);Operario;Estado;Motivo Anulacion',
       ...reportPayments.map((p) =>
         [
           p.consecutivo,
@@ -3259,8 +3148,7 @@ function PaymentsModule({
           p.meses,
           p.fechaInicio,
           p.fechaVencimiento,
-          p.formaPago,
-          p.referenciaPago ?? '',
+          'Efectivo',
           p.totalPagado,
           p.operario,
           p.estado,
@@ -3448,17 +3336,6 @@ function PaymentsModule({
                 <option value="Carro">Carro</option>
                 <option value="Moto">Moto</option>
               </select>
-              <span>Forma de pago</span>
-              <select
-                value={reportMethodFilter}
-                onChange={(e) => setReportMethodFilter(e.target.value as 'Todas' | PaymentMethod)}
-                style={{ height: '38px', borderRadius: '10px', padding: '0 12px', border: '1px solid #CBD5E1' }}
-              >
-                <option value="Todas">Todas</option>
-                <option value="Efectivo">Efectivo</option>
-                <option value="Transferencia">Transferencia</option>
-                <option value="Tarjeta">Tarjeta</option>
-              </select>
               <span>Operario</span>
               <select
                 value={reportOperatorFilter}
@@ -3585,6 +3462,37 @@ function PaymentsModule({
 
   return (
     <section className="module-shell module-payments">
+      <div className="module-subnav" role="tablist" aria-label="Sub-vistas del módulo de pagos">
+        <button
+          type="button"
+          className={subView === 'charge' ? 'active' : ''}
+          onClick={() => setSubView('charge')}
+        >
+          <Icon name="card" size={16} />Cobrar Mensualidad
+        </button>
+        <button
+          type="button"
+          className={subView === 'expiring' ? 'active' : ''}
+          onClick={() => setSubView('expiring')}
+        >
+          <Icon name="alert" size={16} />Por Vencer y Vencidas {expiringCount > 0 && <span className="badge-warn">{expiringCount}</span>}
+        </button>
+        <button
+          type="button"
+          className={subView === 'history' ? 'active' : ''}
+          onClick={() => setSubView('history')}
+        >
+          <Icon name="receipt" size={16} />Historial y Caja del Día
+        </button>
+        <button
+          type="button"
+          className={subView === 'tariffs' ? 'active' : ''}
+          onClick={() => setSubView('tariffs')}
+        >
+          <Icon name="dollar" size={16} />Tarifas y Recaudo
+        </button>
+      </div>
+
       <div className="module-card">
         {subView === 'charge'
           ? renderChargeView()
@@ -3658,26 +3566,16 @@ function PaymentsModule({
                   </div>
                   <div className="receipt-row">
                     <span>Forma de pago</span>
-                    <strong>{receiptModal.payment.formaPago}</strong>
+                    <strong>Efectivo</strong>
                   </div>
-                  {receiptModal.payment.formaPago === 'Efectivo' && receiptModal.payment.valorRecibidoEfectivo !== null && (
-                    <>
-                      <div className="receipt-row">
-                        <span>Valor recibido en efectivo</span>
-                        <strong>{formatCOP(receiptModal.payment.valorRecibidoEfectivo)}</strong>
-                      </div>
-                      <div className="receipt-row">
-                        <span>Cambio devuelto</span>
-                        <strong>{formatCOP(receiptModal.payment.cambioDevueltoEfectivo ?? 0)}</strong>
-                      </div>
-                    </>
-                  )}
-                  {receiptModal.payment.referenciaPago && (
-                    <div className="receipt-row">
-                      <span>Referencia / Aprobación</span>
-                      <strong>{receiptModal.payment.referenciaPago}</strong>
-                    </div>
-                  )}
+                  <div className="receipt-row">
+                    <span>Valor recibido en efectivo</span>
+                    <strong>{formatCOP(receiptModal.payment.valorRecibidoEfectivo ?? receiptModal.payment.totalPagado)}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Cambio devuelto</span>
+                    <strong>{formatCOP(receiptModal.payment.cambioDevueltoEfectivo ?? 0)}</strong>
+                  </div>
                   <div className="receipt-row">
                     <span>Operario que registró</span>
                     <strong>{receiptModal.payment.operario}</strong>
@@ -3734,7 +3632,7 @@ function PaymentsModule({
                     setAnnulReason(e.target.value)
                     setAnnulError('')
                   }}
-                  placeholder="Ej. Error en número de meses seleccionados o medio de pago equivocado..."
+                  placeholder="Ej. Error en número de meses seleccionados al cobrar..."
                   autoFocus
                 />
               </div>
@@ -3779,16 +3677,8 @@ function PaymentsModule({
                     <strong>{todayValidPayments.length}</strong>
                   </div>
                   <div className="receipt-row">
-                    <span>Efectivo ({todayByMethod('Efectivo').count})</span>
-                    <strong>{formatCOP(todayByMethod('Efectivo').total)}</strong>
-                  </div>
-                  <div className="receipt-row">
-                    <span>Transferencia ({todayByMethod('Transferencia').count})</span>
-                    <strong>{formatCOP(todayByMethod('Transferencia').total)}</strong>
-                  </div>
-                  <div className="receipt-row">
-                    <span>Tarjeta ({todayByMethod('Tarjeta').count})</span>
-                    <strong>{formatCOP(todayByMethod('Tarjeta').total)}</strong>
+                    <span>Efectivo ({todayValidPayments.length})</span>
+                    <strong>{formatCOP(todayTotalCollected)}</strong>
                   </div>
                   <div className="receipt-row">
                     <span>Recaudo Carros ({todayByType('Carro').count})</span>

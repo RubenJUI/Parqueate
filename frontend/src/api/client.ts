@@ -382,7 +382,7 @@ export function buildInitialCells(operatorName: string, openTickets: Ticket[] = 
 // MÓDULO 3: GESTIÓN DE PAGOS DE MENSUALIDADES Y TARIFAS (HU-P01 a HU-P12)
 // ============================================================================
 
-export type PaymentMethod = 'Efectivo' | 'Transferencia' | 'Tarjeta'
+export type PaymentMethod = 'Efectivo'
 export type PaymentStatus = 'Registrado' | 'Anulado'
 export type SubscriptionState = 'Al día' | 'Por vencer' | 'Vencida' | 'Sin mensualidad'
 
@@ -800,8 +800,8 @@ export function buildSeedPaymentsFromUsers(users: UserRecord[], tariffs: Tariffs
   // 1) Al día (+22 días), 2) Por vencer (+3 días), 3) Vencida (-4 días), 4) Al día (+18 días)
   const presets: Array<{ startOffset: number; method: PaymentMethod; ref: string | null }> = [
     { startOffset: -7, method: 'Efectivo', ref: null }, // Vence en +22 días (Al día)
-    { startOffset: -26, method: 'Transferencia', ref: 'TRX-894120' }, // Vence en +3 días (Por vencer)
-    { startOffset: -33, method: 'Tarjeta', ref: 'APR-441092' }, // Venció hace 4 días (Vencida)
+    { startOffset: -26, method: 'Efectivo', ref: null }, // Vence en +3 días (Por vencer)
+    { startOffset: -33, method: 'Efectivo', ref: null }, // Venció hace 4 días (Vencida)
     { startOffset: -11, method: 'Efectivo', ref: null }, // Vence en +18 días (Al día)
   ]
 

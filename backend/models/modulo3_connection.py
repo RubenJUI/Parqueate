@@ -155,10 +155,10 @@ def ensure_module3_schema(conn) -> None:
                 )
                 rows = cur.fetchall()
                 presets = [
-                    (-7, "Efectivo", None),          # Al día (+22 días)
-                    (-26, "Transferencia", "TRX-894120"),  # Por vencer (+3 días)
-                    (-33, "Tarjeta", "APR-441092"),  # Vencida (-4 días)
-                    (-11, "Efectivo", None),         # Al día (+18 días)
+                    (-7, "Efectivo", None),   # Al día (+22 días)
+                    (-26, "Efectivo", None),  # Por vencer (+3 días)
+                    (-33, "Efectivo", None),  # Vencida (-4 días)
+                    (-11, "Efectivo", None),  # Al día (+18 días)
                 ]
                 seq = 1
                 for idx, r in enumerate(rows):
@@ -195,13 +195,25 @@ def ensure_module3_schema(conn) -> None:
                             fecha_fin,
                             metodo,
                             ref,
-                            unitario if metodo == "Efectivo" else None,
-                            0 if metodo == "Efectivo" else None,
+                            unitario,
+                            0,
                             sanitizar_bd(reparar_mojibake(r["operario"] or "Administrador")),
                             datetime.combine(fecha_ini, datetime.min.time()) + timedelta(hours=9, minutes=15 + idx * 5),
                         ),
                     )
                     seq += 1
+
+        # Normalizar cualquier pago existente a Efectivo
+        cur.execute(
+            """
+            UPDATE pago_mensualidad
+            SET metodo_pago = 'Efectivo',
+                referencia_pago = NULL,
+                valor_recibido_cop = COALESCE(valor_recibido_cop, valor_total_cop),
+                cambio_cop = COALESCE(cambio_cop, 0)
+            WHERE metodo_pago <> 'Efectivo' OR valor_recibido_cop IS NULL
+            """
+        )
 
     conn.commit()
 
@@ -537,25 +549,15 @@ class Modulo3PagoConnection:
             valor_unitario = Modulo3TarifaConnection(self.conn).obtener_tarifa_vigente(cur, tipo_v)
             valor_total = int(valor_unitario) * int(datos.meses_pagados)
 
-            # RN-P10: validación según método de pago
-            if datos.metodo_pago == "Efectivo":
-                recibido = int(datos.valor_recibido_cop) if datos.valor_recibido_cop is not None else valor_total
-                if recibido < valor_total:
-                    raise HTTPException(
-                        status_code=HTTP_400_BAD_REQUEST,
-                        detail=f"El valor recibido en efectivo ({recibido}) es menor al total a pagar ({valor_total}).",
-                    )
-                cambio = recibido - valor_total
-                referencia = None
-            else:
-                referencia = reparar_mojibake(datos.referencia_pago or "").strip().upper()
-                if not referencia:
-                    raise HTTPException(
-                        status_code=HTTP_400_BAD_REQUEST,
-                        detail=f"El número de referencia o aprobación es obligatorio para pagos con {datos.metodo_pago.lower()} (RN-P10).",
-                    )
-                recibido = None
-                cambio = None
+            # Pago exclusivamente en Efectivo
+            recibido = int(datos.valor_recibido_cop) if datos.valor_recibido_cop is not None else valor_total
+            if recibido < valor_total:
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail=f"El valor recibido en efectivo ({recibido}) es menor al total a pagar ({valor_total}).",
+                )
+            cambio = recibido - valor_total
+            referencia = None
 
             # Consultar último pago Registrado de la placa para calcular la vigencia (RN-P03)
             cur.execute(
@@ -810,14 +812,14 @@ class Modulo3PagoConnection:
                     "fechaVencimiento": f_fin,
                     "fecha_fin_vigencia": f_fin,
                     "fechaVencimientoAnterior": vencimiento_previo_por_id.get(pid),
-                    "formaPago": r["metodo_pago"],
-                    "metodo_pago": r["metodo_pago"],
-                    "valorRecibidoEfectivo": int(r["valor_recibido_cop"]) if r.get("valor_recibido_cop") is not None else None,
-                    "valor_recibido_cop": int(r["valor_recibido_cop"]) if r.get("valor_recibido_cop") is not None else None,
-                    "cambioDevueltoEfectivo": int(r["cambio_cop"]) if r.get("cambio_cop") is not None else None,
-                    "cambio_cop": int(r["cambio_cop"]) if r.get("cambio_cop") is not None else None,
-                    "referenciaPago": referencia,
-                    "referencia_pago": referencia,
+                    "formaPago": "Efectivo",
+                    "metodo_pago": "Efectivo",
+                    "valorRecibidoEfectivo": int(r["valor_recibido_cop"]) if r.get("valor_recibido_cop") is not None else int(r["valor_total_cop"]),
+                    "valor_recibido_cop": int(r["valor_recibido_cop"]) if r.get("valor_recibido_cop") is not None else int(r["valor_total_cop"]),
+                    "cambioDevueltoEfectivo": int(r["cambio_cop"]) if r.get("cambio_cop") is not None else 0,
+                    "cambio_cop": int(r["cambio_cop"]) if r.get("cambio_cop") is not None else 0,
+                    "referenciaPago": None,
+                    "referencia_pago": None,
                     "fechaHoraPago": f_reg,
                     "fecha_registro": f_reg,
                     "operario": operario,
@@ -1051,16 +1053,13 @@ class Modulo3PagoConnection:
         total_recaudado = sum(int(p["valor_total_cop"]) for p in validos)
         total_anulado = sum(int(p["valor_total_cop"]) for p in anulados)
 
-        por_metodo = []
-        for m in ("Efectivo", "Transferencia", "Tarjeta"):
-            items = [p for p in validos if p["metodo_pago"] == m]
-            por_metodo.append(
-                {
-                    "metodo": m,
-                    "cantidad": len(items),
-                    "total_cop": sum(int(p["valor_total_cop"]) for p in items),
-                }
-            )
+        por_metodo = [
+            {
+                "metodo": "Efectivo",
+                "cantidad": len(validos),
+                "total_cop": total_recaudado,
+            }
+        ]
 
         por_tipo = []
         for t in ("Carro", "Moto"):
@@ -1170,17 +1169,14 @@ class Modulo3PagoConnection:
                 }
             )
 
-        # Resumen por método de pago
-        por_metodo = []
-        for m in ("Efectivo", "Transferencia", "Tarjeta"):
-            items = [p for p in validos if p["formaPago"] == m]
-            por_metodo.append(
-                {
-                    "metodo": m,
-                    "cantidad": len(items),
-                    "total_cop": sum(int(p["totalPagado"]) for p in items),
-                }
-            )
+        # Resumen por método de pago (exclusivamente Efectivo)
+        por_metodo = [
+            {
+                "metodo": "Efectivo",
+                "cantidad": len(validos),
+                "total_cop": total_recaudado,
+            }
+        ]
 
         # Resumen por operario
         por_op_map: Dict[str, Dict[str, int]] = {}

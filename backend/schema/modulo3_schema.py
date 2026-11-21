@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from schema.tipos import TipoVehiculo
 
-MetodoPago = Literal["Efectivo", "Transferencia", "Tarjeta"]
+MetodoPago = Literal["Efectivo"]
 EstadoPago = Literal["Registrado", "Anulado"]
 EstadoMensualidadBackend = Literal["Vigente", "Por vencer", "Vencida", "Sin mensualidad"]
 EstadoMensualidadUI = Literal["Al día", "Por vencer", "Vencida", "Sin mensualidad"]

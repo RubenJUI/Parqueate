@@ -570,7 +570,7 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
   color: #0F172A;
 }
 .module-subnav {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
