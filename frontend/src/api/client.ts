@@ -4,6 +4,8 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const TOKEN_KEY = 'parqueate.token'
 const CELLS_STORAGE_KEY = 'parqueate.module2.cells'
 const USERS_STORAGE_KEY = 'parqueate.module2.users'
+const PAYMENTS_STORAGE_KEY = 'parqueate.module3.payments'
+const TARIFFS_STORAGE_KEY = 'parqueate.module3.tariffs'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -372,4 +374,335 @@ export function buildInitialCells(operatorName: string, openTickets: Ticket[] = 
     })
   }
   return syncCellsWithTickets(baseCells, openTickets)
+}
+
+// ============================================================================
+// MÓDULO 3: GESTIÓN DE PAGOS DE MENSUALIDADES Y TARIFAS (HU-P01 a HU-P12)
+// ============================================================================
+
+export type PaymentMethod = 'Efectivo' | 'Transferencia' | 'Tarjeta'
+export type PaymentStatus = 'Registrado' | 'Anulado'
+export type SubscriptionState = 'Al día' | 'Por vencer' | 'Vencida' | 'Sin mensualidad'
+
+export type PaymentRecord = {
+  id: number
+  consecutivo: string
+  userId: number
+  documentoTipo: UserRecord['documentoTipo']
+  documento: string
+  nombreTitular: string
+  celularTitular: string
+  placa: string
+  tipoVehiculo: VehicleType
+  marcaVehiculo: string
+  colorVehiculo: string
+  meses: 1 | 2 | 3
+  tarifaMensualAplicada: number
+  totalPagado: number
+  fechaInicio: string // YYYY-MM-DD
+  fechaVencimiento: string // YYYY-MM-DD (vence 23:59)
+  fechaVencimientoAnterior: string | null
+  formaPago: PaymentMethod
+  valorRecibidoEfectivo: number | null
+  cambioDevueltoEfectivo: number | null
+  referenciaPago: string | null
+  fechaHoraPago: string // ISO string
+  operario: string
+  estado: PaymentStatus
+  motivoAnulacion: string | null
+  usuarioAnulacion: string | null
+  fechaHoraAnulacion: string | null
+}
+
+export type TariffHistoryEntry = {
+  id: number
+  tipo: VehicleType
+  valorAnterior: number
+  valorNuevo: number
+  fechaInicioVigencia: string // YYYY-MM-DD
+  motivo: string
+  usuarioResponsable: string
+  fechaRegistro: string // ISO string
+}
+
+export type TariffsState = {
+  Carro: number
+  Moto: number
+  historial: TariffHistoryEntry[]
+}
+
+export type VehicleSubscriptionInfo = {
+  placa: string
+  estado: SubscriptionState
+  fechaInicio: string | null
+  fechaVencimiento: string | null
+  diasRestantes: number | null
+  diasMora: number
+  ultimoPagoId: number | null
+}
+
+export const DEFAULT_TARIFF_CARRO = 120000
+export const DEFAULT_TARIFF_MOTO = 65000
+
+export function todayColombiaYMD(now: Date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  return formatter.format(now)
+}
+
+export function isoToColombiaYMD(isoString: string): string {
+  try {
+    const d = new Date(isoString)
+    if (Number.isNaN(d.getTime())) return isoString.slice(0, 10)
+    return todayColombiaYMD(d)
+  } catch {
+    return isoString.slice(0, 10)
+  }
+}
+
+export function addCalendarDaysYMD(ymd: string, daysToAdd: number): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  const utc = Date.UTC(y, (m || 1) - 1, (d || 1) + daysToAdd, 12, 0, 0)
+  const next = new Date(utc)
+  const ny = next.getUTCFullYear()
+  const nm = String(next.getUTCMonth() + 1).padStart(2, '0')
+  const nd = String(next.getUTCDate()).padStart(2, '0')
+  return `${ny}-${nm}-${nd}`
+}
+
+export function diffCalendarDaysYMD(targetYMD: string, baseYMD: string = todayColombiaYMD()): number {
+  const [ty, tm, td] = targetYMD.split('-').map(Number)
+  const [by, bm, bd] = baseYMD.split('-').map(Number)
+  const targetUtc = Date.UTC(ty, (tm || 1) - 1, td || 1, 12, 0, 0)
+  const baseUtc = Date.UTC(by, (bm || 1) - 1, bd || 1, 12, 0, 0)
+  return Math.round((targetUtc - baseUtc) / 86400000)
+}
+
+export function formatCOP(amount: number): string {
+  return `$${Math.round(amount).toLocaleString('es-CO')} COP`
+}
+
+export function loadStoredTariffs(): TariffsState {
+  const today = todayColombiaYMD()
+  const fallback: TariffsState = {
+    Carro: DEFAULT_TARIFF_CARRO,
+    Moto: DEFAULT_TARIFF_MOTO,
+    historial: [
+      {
+        id: 1,
+        tipo: 'Carro',
+        valorAnterior: DEFAULT_TARIFF_CARRO,
+        valorNuevo: DEFAULT_TARIFF_CARRO,
+        fechaInicioVigencia: today,
+        motivo: 'Tarifa mensual base inicial para automóviles',
+        usuarioResponsable: 'Administrador',
+        fechaRegistro: new Date().toISOString(),
+      },
+      {
+        id: 2,
+        tipo: 'Moto',
+        valorAnterior: DEFAULT_TARIFF_MOTO,
+        valorNuevo: DEFAULT_TARIFF_MOTO,
+        fechaInicioVigencia: today,
+        motivo: 'Tarifa mensual base inicial para motocicletas',
+        usuarioResponsable: 'Administrador',
+        fechaRegistro: new Date().toISOString(),
+      },
+    ],
+  }
+  try {
+    const raw = localStorage.getItem(TARIFFS_STORAGE_KEY)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw)
+    if (
+      parsed &&
+      typeof parsed.Carro === 'number' &&
+      typeof parsed.Moto === 'number' &&
+      Array.isArray(parsed.historial)
+    ) {
+      return parsed
+    }
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+export function saveStoredTariffs(tariffs: TariffsState): void {
+  try {
+    localStorage.setItem(TARIFFS_STORAGE_KEY, JSON.stringify(tariffs))
+  } catch {
+    // Si localStorage no está disponible, se mantiene en memoria.
+  }
+}
+
+export function getEffectiveTariffForType(tipo: VehicleType, tariffs: TariffsState): number {
+  const today = todayColombiaYMD()
+  const applicable = tariffs.historial
+    .filter((entry) => entry.tipo === tipo && entry.fechaInicioVigencia <= today)
+    .sort((a, b) => b.id - a.id)
+  if (applicable.length > 0) return applicable[0].valorNuevo
+  return tipo === 'Carro' ? tariffs.Carro : tariffs.Moto
+}
+
+export function loadStoredPayments(): PaymentRecord[] {
+  try {
+    const raw = localStorage.getItem(PAYMENTS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+export function saveStoredPayments(payments: PaymentRecord[]): void {
+  try {
+    localStorage.setItem(PAYMENTS_STORAGE_KEY, JSON.stringify(payments))
+  } catch {
+    // Si localStorage no está disponible, se mantiene en memoria.
+  }
+}
+
+export function getVehicleSubscriptionInfo(
+  placa: string,
+  payments: PaymentRecord[],
+  today: string = todayColombiaYMD(),
+): VehicleSubscriptionInfo {
+  const norm = placa.trim().toUpperCase()
+  const activePayments = payments
+    .filter((p) => p.placa.toUpperCase() === norm && p.estado === 'Registrado')
+    .sort((a, b) => b.id - a.id)
+
+  if (activePayments.length === 0) {
+    return {
+      placa: norm,
+      estado: 'Sin mensualidad',
+      fechaInicio: null,
+      fechaVencimiento: null,
+      diasRestantes: null,
+      diasMora: 0,
+      ultimoPagoId: null,
+    }
+  }
+
+  const latest = activePayments[0]
+  const diff = diffCalendarDaysYMD(latest.fechaVencimiento, today)
+
+  if (diff < 0) {
+    return {
+      placa: norm,
+      estado: 'Vencida',
+      fechaInicio: latest.fechaInicio,
+      fechaVencimiento: latest.fechaVencimiento,
+      diasRestantes: diff,
+      diasMora: Math.abs(diff),
+      ultimoPagoId: latest.id,
+    }
+  }
+
+  if (diff <= 5) {
+    return {
+      placa: norm,
+      estado: 'Por vencer',
+      fechaInicio: latest.fechaInicio,
+      fechaVencimiento: latest.fechaVencimiento,
+      diasRestantes: diff,
+      diasMora: 0,
+      ultimoPagoId: latest.id,
+    }
+  }
+
+  return {
+    placa: norm,
+    estado: 'Al día',
+    fechaInicio: latest.fechaInicio,
+    fechaVencimiento: latest.fechaVencimiento,
+    diasRestantes: diff,
+    diasMora: 0,
+    ultimoPagoId: latest.id,
+  }
+}
+
+export function calculatePaymentPeriod(
+  currentInfo: VehicleSubscriptionInfo,
+  meses: 1 | 2 | 3,
+  today: string = todayColombiaYMD(),
+): { fechaInicio: string; fechaVencimiento: string; diasTotales: number } {
+  const diasTotales = 30 * meses
+  // RN-P03: Si está Al día o Por vencer, inicia el día siguiente al vencimiento actual.
+  // Si está Vencida o Sin mensualidad, inicia hoy.
+  const fechaInicio =
+    (currentInfo.estado === 'Al día' || currentInfo.estado === 'Por vencer') && currentInfo.fechaVencimiento
+      ? addCalendarDaysYMD(currentInfo.fechaVencimiento, 1)
+      : today
+  const fechaVencimiento = addCalendarDaysYMD(fechaInicio, diasTotales - 1)
+  return { fechaInicio, fechaVencimiento, diasTotales }
+}
+
+export function buildSeedPaymentsFromUsers(users: UserRecord[], tariffs: TariffsState): PaymentRecord[] {
+  if (users.length === 0) return []
+  const today = todayColombiaYMD()
+  const seed: PaymentRecord[] = []
+  let seq = 1
+
+  const allActivePairs: Array<{ user: UserRecord; veh: UserVehicle }> = []
+  for (const u of users) {
+    for (const v of u.vehiculos) {
+      allActivePairs.push({ user: u, veh: v })
+    }
+  }
+
+  // Semilla realista para los primeros vehículos registrados:
+  // 1) Al día (+22 días), 2) Por vencer (+3 días), 3) Vencida (-4 días), 4) Al día (+18 días)
+  const presets: Array<{ startOffset: number; method: PaymentMethod; ref: string | null }> = [
+    { startOffset: -7, method: 'Efectivo', ref: null }, // Vence en +22 días (Al día)
+    { startOffset: -26, method: 'Transferencia', ref: 'TRX-894120' }, // Vence en +3 días (Por vencer)
+    { startOffset: -33, method: 'Tarjeta', ref: 'APR-441092' }, // Venció hace 4 días (Vencida)
+    { startOffset: -11, method: 'Efectivo', ref: null }, // Vence en +18 días (Al día)
+  ]
+
+  allActivePairs.slice(0, presets.length).forEach(({ user, veh }, idx) => {
+    const preset = presets[idx]
+    const tarifa = veh.tipo === 'Carro' ? tariffs.Carro : tariffs.Moto
+    const fechaInicio = addCalendarDaysYMD(today, preset.startOffset)
+    const fechaVencimiento = addCalendarDaysYMD(fechaInicio, 29)
+    const pagoDate = new Date(`${fechaInicio}T09:${String(15 + idx * 7).padStart(2, '0')}:00`)
+    seed.push({
+      id: seq,
+      consecutivo: `REC-${String(seq).padStart(4, '0')}`,
+      userId: user.id,
+      documentoTipo: user.documentoTipo,
+      documento: user.documento,
+      nombreTitular: `${user.nombres} ${user.apellidos}`.trim(),
+      celularTitular: user.celular,
+      placa: veh.placa.toUpperCase(),
+      tipoVehiculo: veh.tipo,
+      marcaVehiculo: veh.marca,
+      colorVehiculo: veh.color,
+      meses: 1,
+      tarifaMensualAplicada: tarifa,
+      totalPagado: tarifa,
+      fechaInicio,
+      fechaVencimiento,
+      fechaVencimientoAnterior: null,
+      formaPago: preset.method,
+      valorRecibidoEfectivo: preset.method === 'Efectivo' ? tarifa : null,
+      cambioDevueltoEfectivo: preset.method === 'Efectivo' ? 0 : null,
+      referenciaPago: preset.ref,
+      fechaHoraPago: pagoDate.toISOString(),
+      operario: user.operario || 'Administrador',
+      estado: 'Registrado',
+      motivoAnulacion: null,
+      usuarioAnulacion: null,
+      fechaHoraAnulacion: null,
+    })
+    seq += 1
+  })
+
+  return seed
 }

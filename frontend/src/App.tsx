@@ -4,12 +4,17 @@ import {
   annulTicket,
   ApiError,
   buildInitialCells,
+  buildSeedPaymentsFromUsers,
+  calculatePaymentPeriod,
   checkHealth,
+  convertModule2Cell,
   createModule2Cell,
   createModule2User,
   deleteModule2Cell,
   deleteModule2User,
   deleteModule2Vehicle,
+  formatCOP,
+  getEffectiveTariffForType,
   getFreeCells,
   getHistory,
   getInside,
@@ -18,27 +23,43 @@ import {
   getModule2Users,
   getOccupancy,
   getToken,
+  getVehicleSubscriptionInfo,
   initializeModule2Cells,
+  isoToColombiaYMD,
   loadStoredCells,
+  loadStoredPayments,
+  loadStoredTariffs,
   loadStoredUsers,
   login,
   logout,
   lookupVehicle,
   registerEntry,
   registerExit,
+  restoreModule2Cell,
   saveStoredCells,
+  saveStoredPayments,
+  saveStoredTariffs,
   saveStoredUsers,
   setUnauthorizedHandler,
   syncCellsWithTickets,
+  todayColombiaYMD,
   toggleModule2UserStatus,
   toggleModule2VehicleStatus,
   updateModule2Cell,
-  convertModule2Cell,
-  restoreModule2Cell,
   updateModule2User,
 } from './api/client'
 import type { Cell, EntryResult, Occupancy, OpTab, Ticket, User, VehicleLookup, VehicleType } from './domain/parking'
-import type { CellRecord, CellStatus, UserRecord, UserStatus } from './api/client'
+import type {
+  CellRecord,
+  CellStatus,
+  PaymentMethod,
+  PaymentRecord,
+  PaymentStatus,
+  SubscriptionState,
+  TariffsState,
+  UserRecord,
+  UserStatus,
+} from './api/client'
 import { formatDate, formatDateTime, initials, medellinDate, medellinTime, ticketCode, todayLong } from './shared/formatters'
 
 const errorMessage = (error: unknown) => error instanceof ApiError ? error.message : 'Ocurrió un error inesperado'
@@ -68,6 +89,11 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
     // Tarjeta de pago: módulo de pagos y mensualidades.
     card: <><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M2 10h20M6 15h4" /></>,
+    printer: <><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" rx="1" /></>,
+    download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></>,
+    calendar: <><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>,
+    receipt: <><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z" /><path d="M8 9h8M8 13h8M8 17h5" /></>,
+    dollar: <><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></>,
     // Tuerca: módulo de configuración.
     settings: <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></>,
   }
@@ -121,17 +147,28 @@ function LiveClock({ className }: { className: string }) {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const tone = status === 'Vigente' || status === 'Activo' ? 'green' : status === 'Por vencer' ? 'amber' : status === 'Finalizado' ? 'gray' : 'red'
+  const tone =
+    status === 'Vigente' || status === 'Al día' || status === 'Activo' || status === 'Registrado'
+      ? 'green'
+      : status === 'Por vencer'
+        ? 'amber'
+        : status === 'Finalizado' || status === 'Sin mensualidad'
+          ? 'gray'
+          : 'red'
   return <Badge tone={tone}>{status}</Badge>
 }
 
 const roleLabel = (user: User) => user.rol === 'Administrador' ? 'Administrador' : 'Operario'
+
+export type PaymentsSubView = 'charge' | 'expiring' | 'history' | 'tariffs'
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [checkingSession, setCheckingSession] = useState(() => !!getToken())
   const [cells, setCells] = useState<CellRecord[]>(() => loadStoredCells())
   const [users, setUsers] = useState<UserRecord[]>(() => loadStoredUsers())
+  const [payments, setPayments] = useState<PaymentRecord[]>(() => loadStoredPayments())
+  const [tariffs, setTariffs] = useState<TariffsState>(() => loadStoredTariffs())
 
   useEffect(() => {
     saveStoredCells(cells)
@@ -140,6 +177,28 @@ export default function App() {
   useEffect(() => {
     saveStoredUsers(users)
   }, [users])
+
+  useEffect(() => {
+    saveStoredPayments(payments)
+  }, [payments])
+
+  useEffect(() => {
+    saveStoredTariffs(tariffs)
+  }, [tariffs])
+
+  useEffect(() => {
+    if (users.length === 0 || payments.length > 0) return
+    try {
+      if (localStorage.getItem('parqueate.module3.seeded') === '1') return
+      const seeded = buildSeedPaymentsFromUsers(users, tariffs)
+      if (seeded.length > 0) {
+        setPayments(seeded)
+        localStorage.setItem('parqueate.module3.seeded', '1')
+      }
+    } catch {
+      // Ignorar si localStorage no está disponible
+    }
+  }, [users, payments.length, tariffs])
 
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null))
@@ -156,6 +215,10 @@ export default function App() {
       setCells={setCells}
       users={users}
       setUsers={setUsers}
+      payments={payments}
+      setPayments={setPayments}
+      tariffs={tariffs}
+      setTariffs={setTariffs}
       onLogout={() => { logout(); setUser(null) }}
     />
   )
@@ -171,6 +234,10 @@ function Operations({
   setCells,
   users,
   setUsers,
+  payments,
+  setPayments,
+  tariffs,
+  setTariffs,
   onLogout,
 }: {
   user: User
@@ -178,6 +245,10 @@ function Operations({
   setCells: React.Dispatch<React.SetStateAction<CellRecord[]>>
   users: UserRecord[]
   setUsers: React.Dispatch<React.SetStateAction<UserRecord[]>>
+  payments: PaymentRecord[]
+  setPayments: React.Dispatch<React.SetStateAction<PaymentRecord[]>>
+  tariffs: TariffsState
+  setTariffs: React.Dispatch<React.SetStateAction<TariffsState>>
   onLogout: () => void
 }) {
   const [opTab, setOpTab] = useState<OpTab>('console')
@@ -189,6 +260,7 @@ function Operations({
   const [profileOpen, setProfileOpen] = useState(false)
   const [roleMode, setRoleMode] = useState<'Operario' | 'Administrador'>(user.rol === 'Administrador' ? 'Administrador' : 'Operario')
   const [usersSubView, setUsersSubView] = useState<UsersSubView>('directory')
+  const [paymentsSubView, setPaymentsSubView] = useState<PaymentsSubView>('charge')
   const [cellTypeFilter, setCellTypeFilter] = useState<CellTypeFilterOption>('Todas')
   const [cellStateFilter, setCellStateFilter] = useState<CellStateFilterOption>('Todos')
 
@@ -241,6 +313,20 @@ function Operations({
     setCellStateFilter('Todos')
   }
 
+  // Contador dinámico para el badge de "Por Vencer y Vencidas" (HU-P08)
+  const expiringOrExpiredCount = users
+    .filter((u) => u.estado === 'Activo')
+    .reduce((acc, u) => {
+      return (
+        acc +
+        u.vehiculos.filter((v) => {
+          if (v.estado !== 'Activo') return false
+          const sub = getVehicleSubscriptionInfo(v.placa, payments)
+          return sub.estado === 'Por vencer' || sub.estado === 'Vencida'
+        }).length
+      )
+    }, 0)
+
   return <div className="app-shell canvas-shell">
     <div className="canvas-identity">
       <img className="canvas-logo" src="/logo.svg" alt="" />
@@ -255,10 +341,13 @@ function Operations({
         totalInside={totalInside}
         cells={cells}
         onSelectVehicleType={openCellsMapForType}
+        paymentsSubView={paymentsSubView}
+        setPaymentsSubView={setPaymentsSubView}
+        expiringCount={expiringOrExpiredCount}
       />
       {fullTypes.length > 0 && <div className="capacity-alert notice-red"><Icon name="alert" size={17} /><span><strong>Sin celdas libres de {fullTypes.map(t => t === 'Carro' ? 'carro' : 'moto').join(' ni de ')}.</strong> {user.rol === 'Administrador' ? 'Con el cupo garantizado esto indica un error de datos: revisa las celdas fuera de servicio y las mensualidades vigentes.' : 'Avisa al administrador.'}</span></div>}
       <div className="content">
-        {opTab === 'console' && <Console cells={cells} onChanged={onChanged} />}
+        {opTab === 'console' && <Console cells={cells} payments={payments} onChanged={onChanged} />}
         {opTab === 'inside' && <InsideTable version={version} onChanged={onChanged} />}
         {opTab === 'history' && <HistoryTable version={version} user={user} onChanged={onChanged} />}
         {opTab === 'users' && (
@@ -269,6 +358,7 @@ function Operations({
             setCells={setCells}
             users={users}
             setUsers={setUsers}
+            payments={payments}
             openTickets={openTickets}
             subView={usersSubView}
             setSubView={setUsersSubView}
@@ -278,7 +368,21 @@ function Operations({
             setCellStateFilter={setCellStateFilter}
           />
         )}
-        {opTab === 'payments' && <ModulePlaceholder title="Pagos y mensualidades" description="Gestión de pagos, vigencias, vencimientos y alertas de renovación." />}
+        {opTab === 'payments' && (
+          <PaymentsModule
+            roleMode={roleMode}
+            user={user}
+            users={users}
+            cells={cells}
+            payments={payments}
+            setPayments={setPayments}
+            tariffs={tariffs}
+            setTariffs={setTariffs}
+            subView={paymentsSubView}
+            setSubView={setPaymentsSubView}
+            onNotify={notify}
+          />
+        )}
         {opTab === 'config' && <ModulePlaceholder title="Configuración" description="Parámetros del sistema, celdas, acceso y reglas operativas." />}
       </div>
     </main>
@@ -373,12 +477,18 @@ function OperationsHeader({
   totalInside,
   cells,
   onSelectVehicleType,
+  paymentsSubView,
+  setPaymentsSubView,
+  expiringCount = 0,
 }: {
   tab: OpTab
   setTab: (t: OpTab) => void
   totalInside: number
   cells: CellRecord[]
   onSelectVehicleType: (tipo: VehicleType) => void
+  paymentsSubView?: PaymentsSubView
+  setPaymentsSubView?: (v: PaymentsSubView) => void
+  expiringCount?: number
 }) {
   const pageTitle = tab === 'console' ? '¿Qué vehículo quieres registrar?' : tab === 'inside' ? 'Vehículos dentro' : tab === 'history' ? 'Historial y trazabilidad' : tab === 'users' ? 'Usuarios y celdas' : tab === 'payments' ? 'Pagos y mensualidades' : 'Configuración del sistema'
   const pageSubtitle = tab === 'console' ? 'Valida una placa y completa el movimiento en segundos.' : tab === 'inside' || tab === 'history' ? 'Consulta la operación sin salir de la estación.' : tab === 'users' ? 'Gestiona acceso, usuarios y disponibilidad del parqueadero.' : tab === 'payments' ? 'Administra pagos, vigencias y recordatorios del servicio.' : 'Configura celdas, roles y reglas operativas del sistema.'
@@ -426,7 +536,7 @@ function OperationsHeader({
     </div>
   )
 
-  if (tab === 'users') {
+  if (tab === 'users' || tab === 'config') {
     return (
       <>
         {renderOccupancyHud()}
@@ -435,6 +545,52 @@ function OperationsHeader({
             <div><span className="eyebrow">ESTACIÓN DE ACCESO · MEDELLÍN</span><h1>{pageTitle}</h1><p>{pageSubtitle}</p></div>
             <div className="date-chip"><Icon name="clock" size={16} /><span><small>HOY</small>{todayLong()}</span></div>
           </div>
+        </div>
+      </>
+    )
+  }
+
+  if (tab === 'payments') {
+    return (
+      <>
+        {renderOccupancyHud()}
+        <div className="page-head spotlight-head compact">
+          <div className="title-row">
+            <div><span className="eyebrow">ESTACIÓN DE ACCESO · MEDELLÍN</span><h1>{pageTitle}</h1><p>{pageSubtitle}</p></div>
+            <div className="date-chip"><Icon name="clock" size={16} /><span><small>HOY</small>{todayLong()}</span></div>
+          </div>
+          {paymentsSubView && setPaymentsSubView && (
+            <div className="module-subnav" role="tablist" aria-label="Sub-vistas del módulo de pagos" style={{ marginTop: '28px', marginBottom: 0 }}>
+              <button
+                type="button"
+                className={paymentsSubView === 'charge' ? 'active' : ''}
+                onClick={() => setPaymentsSubView('charge')}
+              >
+                <Icon name="card" size={16} />Cobrar Mensualidad
+              </button>
+              <button
+                type="button"
+                className={paymentsSubView === 'expiring' ? 'active' : ''}
+                onClick={() => setPaymentsSubView('expiring')}
+              >
+                <Icon name="alert" size={16} />Por Vencer y Vencidas {expiringCount > 0 && <span className="badge-warn">{expiringCount}</span>}
+              </button>
+              <button
+                type="button"
+                className={paymentsSubView === 'history' ? 'active' : ''}
+                onClick={() => setPaymentsSubView('history')}
+              >
+                <Icon name="receipt" size={16} />Historial y Caja del Día
+              </button>
+              <button
+                type="button"
+                className={paymentsSubView === 'tariffs' ? 'active' : ''}
+                onClick={() => setPaymentsSubView('tariffs')}
+              >
+                <Icon name="dollar" size={16} />Tarifas y Recaudo
+              </button>
+            </div>
+          )}
         </div>
       </>
     )
@@ -478,10 +634,18 @@ function monthlyNotice(vehicle: VehicleLookup) {
   return { tone: 'notice-amber', text: m.dias_restantes === 0 ? 'Su mensualidad vence hoy' : `Su mensualidad vence en ${m.dias_restantes} día${m.dias_restantes === 1 ? '' : 's'}` }
 }
 
-function Console({ cells: moduleCells, onChanged }: { cells: CellRecord[]; onChanged: (message: string) => void }) {
+function Console({
+  cells: moduleCells,
+  payments,
+  onChanged,
+}: {
+  cells: CellRecord[]
+  payments: PaymentRecord[]
+  onChanged: (message: string) => void
+}) {
   const [mode, setMode] = useState<'entry' | 'exit'>('entry')
   const [plate, setPlate] = useState('')
-  const [vehicle, setVehicle] = useState<VehicleLookup | null>(null)
+  const [rawVehicle, setRawVehicle] = useState<VehicleLookup | null>(null)
   const [lookupError, setLookupError] = useState('')
   const [loading, setLoading] = useState(false)
   const [apiFreeCells, setApiFreeCells] = useState<Cell[]>([])
@@ -495,18 +659,44 @@ function Console({ cells: moduleCells, onChanged }: { cells: CellRecord[]; onCha
 
   // RNF-02: la placa se valida mientras se escribe, sin pasos extra.
   useEffect(() => {
-    setVehicle(null); setLookupError(''); setSubmitError(''); setSelectedCell('')
+    setRawVehicle(null); setLookupError(''); setSubmitError(''); setSelectedCell('')
     if (!knownPlate) return
     let cancelled = false
     setLoading(true)
     const timer = window.setTimeout(() => {
       lookupVehicle(plate)
-        .then(found => { if (!cancelled) setVehicle(found) })
+        .then(found => { if (!cancelled) setRawVehicle(found) })
         .catch(err => { if (!cancelled) setLookupError(errorMessage(err)) })
         .finally(() => { if (!cancelled) setLoading(false) })
     }, 300)
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [plate, knownPlate])
+
+  // HU-P06: Cruce en vivo con los pagos del Módulo 3 para reflejar al instante pagos o anulaciones
+  const vehicle: VehicleLookup | null = (() => {
+    if (!rawVehicle) return null
+    const hasMod3History = payments.some((p) => p.placa.toUpperCase() === rawVehicle.placa.toUpperCase())
+    if (!hasMod3History) return rawVehicle
+    const subInfo = getVehicleSubscriptionInfo(rawVehicle.placa, payments)
+    if (subInfo.estado === 'Sin mensualidad' || !subInfo.fechaVencimiento || !subInfo.fechaInicio) {
+      return { ...rawVehicle, mensualidad: null }
+    }
+    return {
+      ...rawVehicle,
+      mensualidad: {
+        fecha_pago: subInfo.fechaInicio,
+        fecha_vencimiento: subInfo.fechaVencimiento,
+        dias_restantes: subInfo.diasRestantes ?? 0,
+        estado: subInfo.estado === 'Al día' ? 'Vigente' : subInfo.estado,
+      },
+    }
+  })()
+
+  const liveSubscriptionBadgeLabel = (() => {
+    if (!vehicle || !vehicle.mensualidad) return 'Sin mensualidad'
+    if (vehicle.mensualidad.estado === 'Vigente') return 'Al día'
+    return vehicle.mensualidad.estado
+  })()
 
   const blockReason = vehicle ? blockReasonFor(mode, vehicle) : ''
 
@@ -561,7 +751,20 @@ function Console({ cells: moduleCells, onChanged }: { cells: CellRecord[]; onCha
         loading ? <div className="validation-empty"><h3>Validando placa…</h3></div> :
         lookupError ? <div className="blocked standalone"><Icon name="x" size={18} /><div><strong>{lookupError.includes('no está asociado') ? 'Placa no registrada' : 'No se pudo validar la placa'}</strong><p>{lookupError}</p></div></div> :
         vehicle && <div className={`validation-card ${blockReason ? 'invalid' : ''}`}>
-          <div className="validation-top"><div className="person"><div className="avatar avatar-light">{initials(vehicle.propietario)}</div><div><strong>{vehicle.propietario}</strong><span className="type-line"><VehicleIcon tipo={vehicle.tipo_vehiculo} size={13} />{vehicle.tipo_vehiculo} · {vehicle.placa}</span></div></div><StatusBadge status={vehicle.mensualidad?.estado ?? 'Sin mensualidad'} /></div>
+          <div className="validation-top">
+            <div className="person">
+              <div className="avatar avatar-light">{initials(vehicle.propietario)}</div>
+              <div>
+                <strong>{vehicle.propietario}</strong>
+                <span className="type-line">
+                  <VehicleIcon tipo={vehicle.tipo_vehiculo} size={13} />
+                  {vehicle.tipo_vehiculo} · {vehicle.placa}
+                  {vehicle.mensualidad && ` · Vence: ${formatDate(vehicle.mensualidad.fecha_vencimiento)}`}
+                </span>
+              </div>
+            </div>
+            <StatusBadge status={liveSubscriptionBadgeLabel} />
+          </div>
           {notice && <div className={`notice ${notice.tone}`}><Icon name="alert" size={17} /><span><strong>{notice.text}</strong>{notice.tone === 'notice-amber' ? ' · Renueva para evitar interrupciones.' : ' · Debe registrar un pago antes de ingresar.'}</span></div>}
           {blockReason ? <div className="blocked"><Icon name="x" size={18} /><div><strong>Movimiento no permitido</strong><p>{blockReason}</p></div></div> :
             mode === 'entry' ? <div className="cell-selector"><Field label="Celda"><select value={selectedCell} onChange={e => setSelectedCell(e.target.value)}><option value="">Asignación automática{cells[0] ? ` (${cells[0].numero_espacio})` : ''}</option>{cells.map(c => <option key={c.id_espacio} value={c.id_espacio}>{c.numero_espacio}</option>)}</select></Field><span className="auto-tag"><Icon name={cells.length ? 'check' : 'alert'} size={14} /> {cells.length ? `${cells.length} celdas libres de ${vehicle.tipo_vehiculo.toLowerCase()}` : `Sin celdas libres de ${vehicle.tipo_vehiculo.toLowerCase()}`}</span></div> :
@@ -581,6 +784,7 @@ function UsersModule({
   setCells,
   users,
   setUsers,
+  payments,
   openTickets,
   subView,
   setSubView,
@@ -595,6 +799,7 @@ function UsersModule({
   setCells: React.Dispatch<React.SetStateAction<CellRecord[]>>
   users: UserRecord[]
   setUsers: React.Dispatch<React.SetStateAction<UserRecord[]>>
+  payments: PaymentRecord[]
   openTickets: Ticket[]
   subView: UsersSubView
   setSubView: React.Dispatch<React.SetStateAction<UsersSubView>>
@@ -715,13 +920,33 @@ function UsersModule({
     return typeOk && stateOk
   })
 
-  // Conteo de mensualidades/vehículos activos por tipo para garantizar el cupo
+  // Conteo de mensualidades vigentes ("Al día" + "Por vencer") por tipo de vehículo (RN-P05 y RN-C05)
   const activeCarVehiclesCount = users
     .filter((u) => u.estado === 'Activo')
-    .reduce((acc, u) => acc + u.vehiculos.filter((v) => v.estado === 'Activo' && v.tipo === 'Carro').length, 0)
+    .reduce((acc, u) => {
+      return (
+        acc +
+        u.vehiculos.filter((v) => {
+          if (v.estado !== 'Activo' || v.tipo !== 'Carro') return false
+          if (payments.length === 0) return true
+          const sub = getVehicleSubscriptionInfo(v.placa, payments)
+          return sub.estado === 'Al día' || sub.estado === 'Por vencer'
+        }).length
+      )
+    }, 0)
   const activeMotoVehiclesCount = users
     .filter((u) => u.estado === 'Activo')
-    .reduce((acc, u) => acc + u.vehiculos.filter((v) => v.estado === 'Activo' && v.tipo === 'Moto').length, 0)
+    .reduce((acc, u) => {
+      return (
+        acc +
+        u.vehiculos.filter((v) => {
+          if (v.estado !== 'Activo' || v.tipo !== 'Moto') return false
+          if (payments.length === 0) return true
+          const sub = getVehicleSubscriptionInfo(v.placa, payments)
+          return sub.estado === 'Al día' || sub.estado === 'Por vencer'
+        }).length
+      )
+    }, 0)
 
   const carOccupiedCount = cells.filter((c) => c.tipo === 'Carro' && c.estado === 'Ocupada').length
   const motoOccupiedCount = cells.filter((c) => c.tipo === 'Moto' && c.estado === 'Ocupada').length
@@ -1851,6 +2076,1765 @@ function UsersModule({
                   Confirmar eliminación
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function SubscriptionPill({ state }: { state: SubscriptionState }) {
+  const cls =
+    state === 'Al día'
+      ? 'al-dia'
+      : state === 'Por vencer'
+        ? 'por-vencer'
+        : state === 'Vencida'
+          ? 'vencida'
+          : 'sin-mensualidad'
+  return <span className={`sub-badge ${cls}`}>{state}</span>
+}
+
+function PaymentsModule({
+  roleMode,
+  user,
+  users,
+  cells,
+  payments,
+  setPayments,
+  tariffs,
+  setTariffs,
+  subView,
+  setSubView,
+  onNotify,
+}: {
+  roleMode: 'Operario' | 'Administrador'
+  user: User
+  users: UserRecord[]
+  cells: CellRecord[]
+  payments: PaymentRecord[]
+  setPayments: React.Dispatch<React.SetStateAction<PaymentRecord[]>>
+  tariffs: TariffsState
+  setTariffs: React.Dispatch<React.SetStateAction<TariffsState>>
+  subView: PaymentsSubView
+  setSubView: React.Dispatch<React.SetStateAction<PaymentsSubView>>
+  onNotify: (msg: string) => void
+}) {
+  const isAdmin = user.rol === 'Administrador' && roleMode === 'Administrador'
+  const currentOperatorName = user.nombre || (isAdmin ? 'Administrador' : 'Operario')
+  const todayYMD = todayColombiaYMD()
+
+  // Estado de Sub-vista 1: Cobrar Mensualidad
+  const [chargeSearch, setChargeSearch] = useState('')
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(() => users[0]?.id ?? null)
+  const [selectedPlate, setSelectedPlate] = useState<string>(() => users[0]?.vehiculos[0]?.placa ?? '')
+  const [monthsToPay, setMonthsToPay] = useState<1 | 2 | 3>(1)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Efectivo')
+  const [cashReceivedInput, setCashReceivedInput] = useState('')
+  const [paymentReference, setPaymentReference] = useState('')
+  const [chargeError, setChargeError] = useState('')
+  const [submittingPayment, setSubmittingPayment] = useState(false)
+
+  // Estado de Sub-vista 2: Por Vencer y Vencidas
+  const [expiringSearch, setExpiringSearch] = useState('')
+  const [expiringStateFilter, setExpiringStateFilter] = useState<'Todas' | 'Por vencer' | 'Vencida'>('Todas')
+  const [expiringTypeFilter, setExpiringTypeFilter] = useState<'Todos' | VehicleType>('Todos')
+
+  // Estado de Sub-vista 3: Historial y Caja del Día
+  const [cashboxOperatorFilter, setCashboxOperatorFilter] = useState<string>('Todos')
+  const [historySearch, setHistorySearch] = useState('')
+  const [historyDesde, setHistoryDesde] = useState('')
+  const [historyHasta, setHistoryHasta] = useState('')
+  const [historyMethodFilter, setHistoryMethodFilter] = useState<'Todas' | PaymentMethod>('Todas')
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<'Todos' | PaymentStatus>('Todos')
+
+  // Estado de Sub-vista 4: Tarifas y Recaudo
+  const [tariffForm, setTariffForm] = useState<{
+    tipo: VehicleType
+    nuevoValor: string
+    fechaInicio: string
+    motivo: string
+  }>({
+    tipo: 'Carro',
+    nuevoValor: '',
+    fechaInicio: todayYMD,
+    motivo: '',
+  })
+  const [tariffError, setTariffError] = useState('')
+  const [tariffSuccess, setTariffSuccess] = useState('')
+
+  const [reportDesde, setReportDesde] = useState(() => {
+    const [y, m] = todayYMD.split('-')
+    return `${y}-${m}-01`
+  })
+  const [reportHasta, setReportHasta] = useState(todayYMD)
+  const [reportTypeFilter, setReportTypeFilter] = useState<'Todos' | VehicleType>('Todos')
+  const [reportMethodFilter, setReportMethodFilter] = useState<'Todas' | PaymentMethod>('Todas')
+  const [reportOperatorFilter, setReportOperatorFilter] = useState<string>('Todos')
+
+  // Modales: Comprobante (HU-P04), Anulación (HU-P09) y Cierre de Caja Imprimible (HU-P11)
+  const [receiptModal, setReceiptModal] = useState<{
+    payment: PaymentRecord
+    isCopy: boolean
+  } | null>(null)
+  const [annulModalPayment, setAnnulModalPayment] = useState<PaymentRecord | null>(null)
+  const [annulReason, setAnnulReason] = useState('')
+  const [annulError, setAnnulError] = useState('')
+  const [cashboxPrintOpen, setCashboxPrintOpen] = useState(false)
+
+  // Sincroniza selección inicial cuando llegan usuarios
+  useEffect(() => {
+    if (users.length === 0) return
+    const current = users.find((u) => u.id === selectedUserId)
+    if (!current) {
+      setSelectedUserId(users[0].id)
+      setSelectedPlate(users[0].vehiculos[0]?.placa ?? '')
+    } else if (!current.vehiculos.some((v) => v.placa === selectedPlate)) {
+      setSelectedPlate(current.vehiculos[0]?.placa ?? '')
+    }
+  }, [users, selectedUserId, selectedPlate])
+
+  // Tarifas efectivas vigentes
+  const effectiveCarTariff = getEffectiveTariffForType('Carro', tariffs)
+  const effectiveMotoTariff = getEffectiveTariffForType('Moto', tariffs)
+
+  // Cupo garantizado por tipo de vehículo (RN-P05 y RN-C05):
+  // Cuenta vehículos activos con mensualidad "Al día" o "Por vencer" vs celdas utilizables (Libre + Ocupada)
+  const getActivePaidCountForType = (tipo: VehicleType): number => {
+    const fromUsers = users
+      .filter((u) => u.estado === 'Activo')
+      .reduce((acc, u) => {
+        return (
+          acc +
+          u.vehiculos.filter((v) => {
+            if (v.estado !== 'Activo' || v.tipo !== tipo) return false
+            const sub = getVehicleSubscriptionInfo(v.placa, payments, todayYMD)
+            return sub.estado === 'Al día' || sub.estado === 'Por vencer'
+          }).length
+        )
+      }, 0)
+    const occupied = cells.filter((c) => c.tipo === tipo && c.estado === 'Ocupada').length
+    return Math.max(fromUsers, occupied)
+  }
+
+  const getUsableCellsCountForType = (tipo: VehicleType): number => {
+    const typeCells = cells.filter((c) => c.tipo === tipo)
+    if (typeCells.length === 0) return tipo === 'Carro' ? 70 : 10
+    return typeCells.filter((c) => c.estado !== 'Fuera de servicio').length
+  }
+
+  // Selección actual en Sub-vista 1
+  const matchingUsersForCharge = users.filter((u) => {
+    if (!chargeSearch.trim()) return true
+    const q = chargeSearch.trim().toLowerCase()
+    const hay = `${u.documentoTipo} ${u.documento} ${u.nombres} ${u.apellidos} ${u.vehiculos.map((v) => v.placa).join(' ')}`.toLowerCase()
+    return hay.includes(q)
+  })
+
+  const selectedUser = users.find((u) => u.id === selectedUserId) ?? matchingUsersForCharge[0] ?? null
+  const selectedVehicle =
+    selectedUser?.vehiculos.find((v) => v.placa === selectedPlate) ?? selectedUser?.vehiculos[0] ?? null
+
+  const selectedSubInfo = selectedVehicle
+    ? getVehicleSubscriptionInfo(selectedVehicle.placa, payments, todayYMD)
+    : null
+
+  const applicableTariff = selectedVehicle
+    ? selectedVehicle.tipo === 'Carro'
+      ? effectiveCarTariff
+      : effectiveMotoTariff
+    : 0
+  const totalToPay = applicableTariff * monthsToPay
+  const calculatedPeriod = selectedSubInfo
+    ? calculatePaymentPeriod(selectedSubInfo, monthsToPay, todayYMD)
+    : null
+
+  const parsedCashReceived = Number(cashReceivedInput.replace(/[^0-9]/g, '')) || 0
+  const cashChange = parsedCashReceived - totalToPay
+
+  // Validaciones de bloqueo en Cobrar Mensualidad (RN-P01 y RN-P05)
+  const chargeBlockReason = (() => {
+    if (!selectedUser || !selectedVehicle || !selectedSubInfo) return ''
+    if (selectedUser.estado === 'Inactivo') {
+      return `El titular ${selectedUser.nombres} ${selectedUser.apellidos} se encuentra en estado Inactivo. El Administrador debe activarlo primero en Usuarios y celdas antes de registrar un pago (RN-P01).`
+    }
+    if (selectedVehicle.estado === 'Inactivo') {
+      return `El vehículo de placa ${selectedVehicle.placa} se encuentra en estado Inactivo. El Administrador debe activarlo primero en Usuarios y celdas antes de registrar un pago (RN-P01).`
+    }
+    // RN-P05: Las renovaciones de mensualidades aún Vigentes ("Al día") o "Por vencer" siempre se permiten.
+    // Si es primer pago ("Sin mensualidad") o está "Vencida", valida el cupo garantizado.
+    if (selectedSubInfo.estado === 'Sin mensualidad' || selectedSubInfo.estado === 'Vencida') {
+      const vigentesTipo = getActivePaidCountForType(selectedVehicle.tipo)
+      const celdasUtilizables = getUsableCellsCountForType(selectedVehicle.tipo)
+      if (vigentesTipo >= celdasUtilizables) {
+        return `Cupo garantizado completo para ${selectedVehicle.tipo.toLowerCase()}s: ya existen ${vigentesTipo} mensualidades al día para ${celdasUtilizables} celdas utilizables (RN-P05). No se puede activar una nueva mensualidad hasta liberar cupo o habilitar celdas.`
+      }
+    }
+    return ''
+  })()
+
+  const handleConfirmPayment = () => {
+    if (submittingPayment || !selectedUser || !selectedVehicle || !selectedSubInfo || !calculatedPeriod) return
+    setChargeError('')
+
+    if (chargeBlockReason) {
+      setChargeError(chargeBlockReason)
+      return
+    }
+
+    if (paymentMethod === 'Efectivo') {
+      if (parsedCashReceived < totalToPay) {
+        setChargeError(`El valor recibido en efectivo (${formatCOP(parsedCashReceived)}) es menor al total a pagar (${formatCOP(totalToPay)}).`)
+        return
+      }
+    } else {
+      if (!paymentReference.trim()) {
+        setChargeError(`Debes ingresar el número de referencia o aprobación para pagos con ${paymentMethod.toLowerCase()} (RN-P10).`)
+        return
+      }
+    }
+
+    setSubmittingPayment(true)
+    try {
+      const nextId = payments.reduce((max, p) => Math.max(max, p.id), 0) + 1
+      const consecutivo = `REC-${String(nextId).padStart(4, '0')}`
+      const newPayment: PaymentRecord = {
+        id: nextId,
+        consecutivo,
+        userId: selectedUser.id,
+        documentoTipo: selectedUser.documentoTipo,
+        documento: selectedUser.documento,
+        nombreTitular: `${selectedUser.nombres} ${selectedUser.apellidos}`.trim(),
+        celularTitular: selectedUser.celular,
+        placa: selectedVehicle.placa.toUpperCase(),
+        tipoVehiculo: selectedVehicle.tipo,
+        marcaVehiculo: selectedVehicle.marca,
+        colorVehiculo: selectedVehicle.color,
+        meses: monthsToPay,
+        tarifaMensualAplicada: applicableTariff,
+        totalPagado: totalToPay,
+        fechaInicio: calculatedPeriod.fechaInicio,
+        fechaVencimiento: calculatedPeriod.fechaVencimiento,
+        fechaVencimientoAnterior: selectedSubInfo.fechaVencimiento,
+        formaPago: paymentMethod,
+        valorRecibidoEfectivo: paymentMethod === 'Efectivo' ? parsedCashReceived : null,
+        cambioDevueltoEfectivo: paymentMethod === 'Efectivo' ? cashChange : null,
+        referenciaPago: paymentMethod !== 'Efectivo' ? paymentReference.trim().toUpperCase() : null,
+        fechaHoraPago: new Date().toISOString(),
+        operario: currentOperatorName,
+        estado: 'Registrado',
+        motivoAnulacion: null,
+        usuarioAnulacion: null,
+        fechaHoraAnulacion: null,
+      }
+
+      setPayments((prev) => [newPayment, ...prev])
+      setCashReceivedInput('')
+      setPaymentReference('')
+      setMonthsToPay(1)
+      setReceiptModal({ payment: newPayment, isCopy: false })
+      onNotify(`Pago ${consecutivo} registrado · ${newPayment.placa} al día hasta el ${formatDate(newPayment.fechaVencimiento)}`)
+    } finally {
+      setSubmittingPayment(false)
+    }
+  }
+
+  // Determina si un pago es el último pago no anulado de ese vehículo (RN-P07)
+  const isLatestActivePaymentForPlate = (payment: PaymentRecord): boolean => {
+    if (payment.estado !== 'Registrado') return false
+    const activeForPlate = payments
+      .filter((p) => p.placa.toUpperCase() === payment.placa.toUpperCase() && p.estado === 'Registrado')
+      .sort((a, b) => b.id - a.id)
+    return activeForPlate[0]?.id === payment.id
+  }
+
+  const handleConfirmAnnulPayment = () => {
+    if (!annulModalPayment) return
+    if (!isAdmin) {
+      setAnnulError('Solo el Administrador puede anular pagos registrados.')
+      return
+    }
+    const reason = annulReason.trim()
+    if (reason.length < 5) {
+      setAnnulError('Debes ingresar un motivo obligatorio (mínimo 5 caracteres) para anular el pago.')
+      return
+    }
+    if (!isLatestActivePaymentForPlate(annulModalPayment)) {
+      setAnnulError('Solo se puede anular el último pago vigente de este vehículo (RN-P07).')
+      return
+    }
+
+    const nowIso = new Date().toISOString()
+    setPayments((prev) =>
+      prev.map((p) =>
+        p.id === annulModalPayment.id
+          ? {
+              ...p,
+              estado: 'Anulado',
+              motivoAnulacion: reason,
+              usuarioAnulacion: currentOperatorName,
+              fechaHoraAnulacion: nowIso,
+            }
+          : p,
+      ),
+    )
+    onNotify(`Comprobante ${annulModalPayment.consecutivo} (${annulModalPayment.placa}) anulado y vigencia revertida`)
+    setAnnulModalPayment(null)
+    setAnnulReason('')
+    setAnnulError('')
+  }
+
+  // Lista de operadores disponibles para filtros
+  const allOperators = Array.from(
+    new Set([currentOperatorName, 'Administrador', 'Operario', ...payments.map((p) => p.operario)]),
+  ).filter(Boolean)
+
+  // Render Sub-vista 1: Cobrar Mensualidad
+  const renderChargeView = () => (
+    <div className="module-panel">
+      <div className="module-panel-head">
+        <div>
+          <h2>Cobrar mensualidad</h2>
+          <p className="detail-hint">Busca un titular o placa, verifica el estado de su vigencia y liquida 1, 2 o 3 meses.</p>
+        </div>
+        <div className="detail-meta">
+          <span className="detail-tag muted"><VehicleIcon tipo="Carro" size={14} /> Tarifa Carro: {formatCOP(effectiveCarTariff)}</span>
+          <span className="detail-tag muted"><VehicleIcon tipo="Moto" size={14} /> Tarifa Moto: {formatCOP(effectiveMotoTariff)}</span>
+        </div>
+      </div>
+
+      <div className="payment-charge-grid">
+        {/* Columna Izquierda: Buscador y Ficha de Usuario y Vehículos */}
+        <div className="payment-column-card">
+          <h3>1. Buscar titular o vehículo</h3>
+          <div className="search-box">
+            <Icon name="search" size={16} />
+            <input
+              value={chargeSearch}
+              onChange={(e) => {
+                const val = e.target.value
+                setChargeSearch(val)
+                setChargeError('')
+                const q = val.trim().toLowerCase()
+                if (!q) return
+                // Si coincide con una placa o documento exacto, preselecciona de inmediato
+                for (const u of users) {
+                  const vehMatch = u.vehiculos.find((v) => v.placa.toLowerCase().includes(q))
+                  if (vehMatch) {
+                    setSelectedUserId(u.id)
+                    setSelectedPlate(vehMatch.placa)
+                    return
+                  }
+                  if (
+                    u.documento.toLowerCase().includes(q) ||
+                    `${u.nombres} ${u.apellidos}`.toLowerCase().includes(q)
+                  ) {
+                    setSelectedUserId(u.id)
+                    setSelectedPlate(u.vehiculos[0]?.placa ?? '')
+                    return
+                  }
+                }
+              }}
+              placeholder="Documento, nombre o placa (ej. 1036000001, Laura, ABC123)..."
+            />
+            {chargeSearch && (
+              <button type="button" className="icon-btn" onClick={() => setChargeSearch('')} aria-label="Limpiar búsqueda">
+                <Icon name="x" size={15} />
+              </button>
+            )}
+          </div>
+
+          {matchingUsersForCharge.length === 0 ? (
+            <div className="module-empty compact">
+              <p>No se encontraron usuarios ni placas que coincidan con "{chargeSearch}".</p>
+            </div>
+          ) : (
+            <div className="payment-user-results" role="listbox" aria-label="Usuarios encontrados">
+              {matchingUsersForCharge.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  className={`payment-user-option ${selectedUser?.id === u.id ? 'selected' : ''}`}
+                  onClick={() => {
+                    setSelectedUserId(u.id)
+                    setSelectedPlate(u.vehiculos[0]?.placa ?? '')
+                    setChargeError('')
+                  }}
+                >
+                  <div>
+                    <strong>{u.nombres} {u.apellidos}</strong>
+                    <small>{u.documentoTipo} {u.documento} · {u.celular}</small>
+                  </div>
+                  <div className="detail-meta">
+                    <span className={`mini-badge ${u.estado === 'Activo' ? 'success' : 'muted'}`}>{u.estado}</span>
+                    <span className="doc-pill">{u.vehiculos.length} {u.vehiculos.length === 1 ? 'vehículo' : 'vehículos'}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedUser && (
+            <div className="payment-user-card">
+              <div className="payment-user-header">
+                <div className="user-meta">
+                  <div className="avatar avatar-light">{initials(`${selectedUser.nombres} ${selectedUser.apellidos}`)}</div>
+                  <div>
+                    <strong>{selectedUser.nombres} {selectedUser.apellidos}</strong>
+                    <small>{selectedUser.documentoTipo} {selectedUser.documento} · Cel: {selectedUser.celular} · {selectedUser.correo || 'Sin correo'}</small>
+                  </div>
+                </div>
+                <span className={`status-pill ${selectedUser.estado === 'Activo' ? 'success' : 'muted'}`}>{selectedUser.estado}</span>
+              </div>
+
+              <span style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>
+                VEHÍCULOS ASOCIADOS (SELECCIONA EL VEHÍCULO A LIQUIDAR)
+              </span>
+
+              <div className="payment-vehicle-cards">
+                {selectedUser.vehiculos.map((v) => {
+                  const sub = getVehicleSubscriptionInfo(v.placa, payments, todayYMD)
+                  const isSelected = selectedVehicle?.placa === v.placa
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      className={`payment-vehicle-card ${isSelected ? 'selected' : ''}`}
+                      onClick={() => {
+                        setSelectedPlate(v.placa)
+                        setChargeError('')
+                      }}
+                    >
+                      <div className="payment-vehicle-top">
+                        <div className="detail-meta">
+                          <span className="vehicle-badge">
+                            <VehicleIcon tipo={v.tipo} size={14} />
+                            <strong>{v.placa}</strong>
+                            <small>{v.tipo}</small>
+                          </span>
+                          <span className="vehicle-meta">{v.marca} · {v.color}</span>
+                          <span className={`mini-badge ${v.estado === 'Activo' ? 'success' : 'muted'}`}>{v.estado}</span>
+                        </div>
+                        <SubscriptionPill state={sub.estado} />
+                      </div>
+                      <div className="payment-vehicle-foot">
+                        {sub.estado === 'Sin mensualidad' ? (
+                          <span>Sin pagos vigentes registrados · Primer cobro de mensualidad</span>
+                        ) : sub.estado === 'Vencida' ? (
+                          <span>
+                            Venció el <strong>{formatDate(sub.fechaVencimiento!)}</strong> ·{' '}
+                            <strong style={{ color: '#991B1B' }}>{sub.diasMora} {sub.diasMora === 1 ? 'día' : 'días'} de mora</strong>
+                          </span>
+                        ) : (
+                          <span>
+                            Vence el <strong>{formatDate(sub.fechaVencimiento!)}</strong> ·{' '}
+                            <strong>{sub.diasRestantes === 0 ? 'Vence hoy' : `${sub.diasRestantes} ${sub.diasRestantes === 1 ? 'día restante' : 'días restantes'}`}</strong>
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Columna Derecha: Formulario de Liquidación */}
+        <div className="payment-column-card">
+          <h3>2. Liquidación y registro de pago</h3>
+
+          {!selectedUser || !selectedVehicle || !selectedSubInfo || !calculatedPeriod ? (
+            <div className="module-empty compact">
+              <p>Selecciona un usuario y un vehículo en la columna izquierda para liquidar su mensualidad.</p>
+            </div>
+          ) : (
+            <>
+              {chargeBlockReason && (
+                <div className="notice notice-red">
+                  <Icon name="alert" size={18} />
+                  <span><strong>Cobro bloqueado:</strong> {chargeBlockReason}</span>
+                </div>
+              )}
+
+              <div className="field">
+                <label>Meses a pagar (cada mes equivale a 30 días calendario)</label>
+                <div className="segmented pills-inline">
+                  {([1, 2, 3] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={monthsToPay === m ? 'active' : ''}
+                      onClick={() => {
+                        setMonthsToPay(m)
+                        setChargeError('')
+                      }}
+                    >
+                      {m} {m === 1 ? 'mes (30 días)' : `meses (${m * 30} días)`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="settlement-summary">
+                <div className="settlement-item">
+                  <span>Vehículo seleccionado</span>
+                  <strong className="type-line">
+                    <VehicleIcon tipo={selectedVehicle.tipo} size={15} />
+                    {selectedVehicle.placa} ({selectedVehicle.tipo})
+                  </strong>
+                  <small>{selectedVehicle.marca} · {selectedVehicle.color}</small>
+                </div>
+                <div className="settlement-item">
+                  <span>Tarifa mensual vigente</span>
+                  <strong>{formatCOP(applicableTariff)}</strong>
+                  <small>Valor unitario por 30 días</small>
+                </div>
+                <div className="settlement-item total">
+                  <span>Total a pagar ({monthsToPay} {monthsToPay === 1 ? 'mes' : 'meses'})</span>
+                  <strong>{formatCOP(totalToPay)}</strong>
+                  <small>Cálculo automático no editable</small>
+                </div>
+                <div className="settlement-item">
+                  <span>Estado actual</span>
+                  <div><SubscriptionPill state={selectedSubInfo.estado} /></div>
+                  <small>
+                    {selectedSubInfo.fechaVencimiento
+                      ? `Vencimiento actual: ${formatDate(selectedSubInfo.fechaVencimiento)}`
+                      : 'Sin vigencia previa'}
+                  </small>
+                </div>
+                <div className="settlement-item full">
+                  <span>Nuevo período cubierto ({calculatedPeriod.diasTotales} días calendario)</span>
+                  <strong>
+                    Del {formatDate(calculatedPeriod.fechaInicio)} al {formatDate(calculatedPeriod.fechaVencimiento)} (23:59)
+                  </strong>
+                  <small>
+                    {selectedSubInfo.estado === 'Al día' || selectedSubInfo.estado === 'Por vencer'
+                      ? 'Inicia el día siguiente al vencimiento actual para conservar todos sus días vigentes.'
+                      : 'Inicia desde hoy por encontrarse vencida o sin mensualidad activa.'}
+                  </small>
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Forma de pago</label>
+                <div className="segmented pills-inline">
+                  {(['Efectivo', 'Transferencia', 'Tarjeta'] as const).map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      className={paymentMethod === method ? 'active' : ''}
+                      onClick={() => {
+                        setPaymentMethod(method)
+                        setChargeError('')
+                      }}
+                    >
+                      {method}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {paymentMethod === 'Efectivo' ? (
+                <>
+                  <div className="field">
+                    <label>Valor recibido en efectivo (COP)</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={cashReceivedInput ? Number(cashReceivedInput.replace(/[^0-9]/g, '')).toLocaleString('es-CO') : ''}
+                      onChange={(e) => {
+                        const digits = e.target.value.replace(/[^0-9]/g, '')
+                        setCashReceivedInput(digits)
+                        setChargeError('')
+                      }}
+                      placeholder={`Mínimo ${totalToPay.toLocaleString('es-CO')}`}
+                    />
+                    <div className="quick-cash-pills">
+                      <button
+                        type="button"
+                        className="quick-cash-pill"
+                        onClick={() => setCashReceivedInput(String(totalToPay))}
+                      >
+                        Exacto ({formatCOP(totalToPay)})
+                      </button>
+                      <button
+                        type="button"
+                        className="quick-cash-pill"
+                        onClick={() => setCashReceivedInput(String(Math.ceil((totalToPay + 10000) / 10000) * 10000))}
+                      >
+                        {formatCOP(Math.ceil((totalToPay + 10000) / 10000) * 10000)}
+                      </button>
+                      <button
+                        type="button"
+                        className="quick-cash-pill"
+                        onClick={() => setCashReceivedInput(String(Math.ceil((totalToPay + 50000) / 50000) * 50000))}
+                      >
+                        {formatCOP(Math.ceil((totalToPay + 50000) / 50000) * 50000)}
+                      </button>
+                    </div>
+                  </div>
+                  <div className={`cash-change-box ${parsedCashReceived < totalToPay ? 'insufficient' : ''}`}>
+                    <span>{parsedCashReceived < totalToPay ? 'Faltante por cubrir' : 'Cambio a devolver al cliente'}</span>
+                    <strong>
+                      {parsedCashReceived < totalToPay
+                        ? formatCOP(totalToPay - parsedCashReceived)
+                        : formatCOP(cashChange)}
+                    </strong>
+                  </div>
+                </>
+              ) : (
+                <div className="field">
+                  <label>Número de referencia / aprobación ({paymentMethod}) · Obligatorio</label>
+                  <input
+                    value={paymentReference}
+                    onChange={(e) => {
+                      setPaymentReference(e.target.value.toUpperCase())
+                      setChargeError('')
+                    }}
+                    placeholder={paymentMethod === 'Transferencia' ? 'Ej. TRX-908412 / Bancolombia' : 'Ej. APR-551902'}
+                  />
+                </div>
+              )}
+
+              {chargeError && (
+                <div className="notice notice-red">
+                  <Icon name="alert" size={16} />
+                  <span>{chargeError}</span>
+                </div>
+              )}
+
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={!!chargeBlockReason || submittingPayment}
+                onClick={handleConfirmPayment}
+                style={{ width: '100%', padding: '14px 20px', fontSize: '15px' }}
+              >
+                {submittingPayment ? 'Procesando pago…' : `Confirmar cobro por ${formatCOP(totalToPay)} y emitir recibo`}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  // Construye las filas de Sub-vista 2: Por Vencer y Vencidas (HU-P08)
+  const expiringRows = (() => {
+    const list: Array<{
+      user: UserRecord
+      vehicle: UserRecord['vehiculos'][number]
+      sub: ReturnType<typeof getVehicleSubscriptionInfo>
+    }> = []
+    for (const u of users) {
+      if (u.estado !== 'Activo') continue
+      for (const v of u.vehiculos) {
+        if (v.estado !== 'Activo') continue
+        const sub = getVehicleSubscriptionInfo(v.placa, payments, todayYMD)
+        if (sub.estado !== 'Por vencer' && sub.estado !== 'Vencida') continue
+        if (expiringStateFilter !== 'Todas' && sub.estado !== expiringStateFilter) continue
+        if (expiringTypeFilter !== 'Todos' && v.tipo !== expiringTypeFilter) continue
+        if (expiringSearch.trim()) {
+          const q = expiringSearch.trim().toLowerCase()
+          const hay = `${u.documentoTipo} ${u.documento} ${u.nombres} ${u.apellidos} ${u.celular} ${v.placa}`.toLowerCase()
+          if (!hay.includes(q)) continue
+        }
+        list.push({ user: u, vehicle: v, sub })
+      }
+    }
+    // Ordenados de la fecha de vencimiento más antigua a la más reciente
+    return list.sort((a, b) => (a.sub.fechaVencimiento ?? '').localeCompare(b.sub.fechaVencimiento ?? ''))
+  })()
+
+  // Render Sub-vista 2: Por Vencer y Vencidas
+  const renderExpiringView = () => (
+    <div className="module-panel">
+      <div className="module-panel-head">
+        <div>
+          <h2>Mensualidades por vencer y vencidas</h2>
+          <p className="detail-hint">
+            Vehículos activos con vencimiento próximo (5 días o menos) o en mora, ordenados desde la fecha de vencimiento más antigua.
+          </p>
+        </div>
+      </div>
+
+      <div className="module-toolbar">
+        <div className="search-box wide">
+          <Icon name="search" size={15} />
+          <input
+            value={expiringSearch}
+            onChange={(e) => setExpiringSearch(e.target.value)}
+            placeholder="Buscar por documento, nombre, celular o placa..."
+          />
+        </div>
+        <div className="filter-stack">
+          <div className="filter-group">
+            <span>Estado</span>
+            <div className="filter-pills">
+              {(['Todas', 'Por vencer', 'Vencida'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`filter-pill ${expiringStateFilter === opt ? 'active' : ''}`}
+                  onClick={() => setExpiringStateFilter(opt)}
+                >
+                  {opt === 'Vencida' ? 'Vencidas' : opt}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="filter-group">
+            <span>Tipo</span>
+            <div className="filter-pills">
+              {(['Todos', 'Carro', 'Moto'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`filter-pill ${expiringTypeFilter === opt ? 'active' : ''}`}
+                  onClick={() => setExpiringTypeFilter(opt)}
+                >
+                  {opt !== 'Todos' && <VehicleIcon tipo={opt} size={14} />}
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {expiringRows.length === 0 ? (
+        <div className="module-empty">
+          <div className="empty-icon"><Icon name="check" size={22} /></div>
+          <h3>No hay mensualidades por vencer ni vencidas con estos filtros</h3>
+          <p>Todos los vehículos activos consultados se encuentran al día o sin alertas pendientes.</p>
+        </div>
+      ) : (
+        <div className="module-table-wrap">
+          <table className="module-table">
+            <thead>
+              <tr>
+                <th>DOCUMENTO</th>
+                <th>NOMBRE</th>
+                <th>CELULAR</th>
+                <th>PLACA</th>
+                <th>TIPO</th>
+                <th>FECHA VENCIMIENTO</th>
+                <th>DÍAS RESTANTES / MORA</th>
+                <th>ACCIÓN</th>
+              </tr>
+            </thead>
+            <tbody>
+              {expiringRows.map(({ user: u, vehicle: v, sub }) => (
+                <tr key={v.placa}>
+                  <td><div className="doc-pill">{u.documentoTipo} {u.documento}</div></td>
+                  <td><strong>{u.nombres} {u.apellidos}</strong></td>
+                  <td><span className="doc-pill">{u.celular}</span></td>
+                  <td><span className="vehicle-badge"><strong>{v.placa}</strong></span></td>
+                  <td>
+                    <span className="type-line">
+                      <VehicleIcon tipo={v.tipo} size={15} />
+                      {v.tipo}
+                    </span>
+                  </td>
+                  <td><strong>{sub.fechaVencimiento ? formatDate(sub.fechaVencimiento) : '—'}</strong></td>
+                  <td>
+                    <div className="detail-meta">
+                      <SubscriptionPill state={sub.estado} />
+                      {sub.estado === 'Vencida' ? (
+                        <strong style={{ color: '#991B1B', fontSize: '12px' }}>
+                          {sub.diasMora} {sub.diasMora === 1 ? 'día de mora' : 'días de mora'}
+                        </strong>
+                      ) : (
+                        <strong style={{ color: '#92400E', fontSize: '12px' }}>
+                          {sub.diasRestantes === 0
+                            ? 'Vence hoy'
+                            : `${sub.diasRestantes} ${sub.diasRestantes === 1 ? 'día restante' : 'días restantes'}`}
+                        </strong>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="primary-btn tiny"
+                      onClick={() => {
+                        setSelectedUserId(u.id)
+                        setSelectedPlate(v.placa)
+                        setChargeSearch('')
+                        setChargeError('')
+                        setSubView('charge')
+                      }}
+                    >
+                      Cobrar →
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+
+  // Cálculos de Sub-vista 3: Caja del Día (HU-P11) e Historial General (HU-P07)
+  const effectiveCashboxOperator = !isAdmin ? currentOperatorName : cashboxOperatorFilter
+  const todayPayments = payments.filter((p) => {
+    const payDay = isoToColombiaYMD(p.fechaHoraPago)
+    if (payDay !== todayYMD) return false
+    if (effectiveCashboxOperator !== 'Todos' && p.operario !== effectiveCashboxOperator) return false
+    return true
+  })
+
+  const todayValidPayments = todayPayments.filter((p) => p.estado === 'Registrado')
+  const todayAnnulledPayments = todayPayments.filter((p) => p.estado === 'Anulado')
+  const todayTotalCollected = todayValidPayments.reduce((acc, p) => acc + p.totalPagado, 0)
+  const todayTotalAnnulled = todayAnnulledPayments.reduce((acc, p) => acc + p.totalPagado, 0)
+
+  const todayByMethod = (method: PaymentMethod) => {
+    const items = todayValidPayments.filter((p) => p.formaPago === method)
+    return { count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
+  }
+  const todayByType = (tipo: VehicleType) => {
+    const items = todayValidPayments.filter((p) => p.tipoVehiculo === tipo)
+    return { count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
+  }
+
+  const filteredHistoryPayments = payments
+    .filter((p) => {
+      const payDay = isoToColombiaYMD(p.fechaHoraPago)
+      if (historyDesde && payDay < historyDesde) return false
+      if (historyHasta && payDay > historyHasta) return false
+      if (historyMethodFilter !== 'Todas' && p.formaPago !== historyMethodFilter) return false
+      if (historyStatusFilter !== 'Todos' && p.estado !== historyStatusFilter) return false
+      if (historySearch.trim()) {
+        const q = historySearch.trim().toLowerCase()
+        const hay = `${p.consecutivo} ${p.documentoTipo} ${p.documento} ${p.nombreTitular} ${p.placa} ${p.operario} ${p.referenciaPago ?? ''}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+    .sort((a, b) => b.id - a.id)
+
+  // Render Sub-vista 3: Historial y Caja del Día
+  const renderHistoryAndCashboxView = () => (
+    <div className="module-panel">
+      {/* Bloque Superior: Resumen de Caja del Día (HU-P11) */}
+      <div className="module-panel-head">
+        <div>
+          <h2>Resumen de caja del día ({formatDate(todayYMD)})</h2>
+          <p className="detail-hint">
+            {isAdmin
+              ? 'Consolidado en vivo de los cobros realizados hoy. Puedes filtrar por operario o imprimir el cierre.'
+              : `Arqueo en vivo de los cobros registrados hoy por el operario en turno (${currentOperatorName}).`}
+          </p>
+        </div>
+        <div className="detail-actions">
+          {isAdmin && (
+            <select
+              value={cashboxOperatorFilter}
+              onChange={(e) => setCashboxOperatorFilter(e.target.value)}
+              style={{ height: '40px', borderRadius: '999px', padding: '0 14px', border: '1px solid #CBD5E1', background: '#FFFFFF', fontWeight: 600 }}
+            >
+              <option value="Todos">Todos los operarios</option>
+              {allOperators.map((op) => (
+                <option key={op} value={op}>{op}</option>
+              ))}
+            </select>
+          )}
+          <button type="button" className="secondary-btn" onClick={() => setCashboxPrintOpen(true)}>
+            <Icon name="printer" size={15} /> Imprimir cierre de caja
+          </button>
+        </div>
+      </div>
+
+      <div className="kpi-grid-4">
+        <div className="kpi-card highlight">
+          <span>Total recaudado hoy</span>
+          <strong>{formatCOP(todayTotalCollected)}</strong>
+          <small>{todayValidPayments.length} {todayValidPayments.length === 1 ? 'pago válido registrado' : 'pagos válidos registrados'}</small>
+        </div>
+        <div className="kpi-card">
+          <span>Por forma de pago</span>
+          <strong>Efectivo: {formatCOP(todayByMethod('Efectivo').total)}</strong>
+          <small>
+            Transferencia: {formatCOP(todayByMethod('Transferencia').total)} ({todayByMethod('Transferencia').count}) · Tarjeta: {formatCOP(todayByMethod('Tarjeta').total)} ({todayByMethod('Tarjeta').count})
+          </small>
+        </div>
+        <div className="kpi-card">
+          <span>Por tipo de vehículo</span>
+          <strong>Carros: {formatCOP(todayByType('Carro').total)} ({todayByType('Carro').count})</strong>
+          <small>Motos: {formatCOP(todayByType('Moto').total)} ({todayByType('Moto').count})</small>
+        </div>
+        <div className="kpi-card muted-danger">
+          <span>Pagos anulados hoy (aparte)</span>
+          <strong>{todayAnnulledPayments.length} {todayAnnulledPayments.length === 1 ? 'anulado' : 'anulados'}</strong>
+          <small>{formatCOP(todayTotalAnnulled)} (No se suman al recaudo de caja)</small>
+        </div>
+      </div>
+
+      <div className="section-divider" />
+
+      {/* Bloque Inferior: Historial General de Pagos (HU-P07) */}
+      <div className="module-panel-head">
+        <div>
+          <h2>Historial general de pagos</h2>
+          <p className="detail-hint">
+            Registro inalterable de mensualidades (ningún pago se edita ni se elimina). Ordenado del más reciente al más antiguo.
+          </p>
+        </div>
+      </div>
+
+      <div className="module-toolbar">
+        <div className="search-box wide">
+          <Icon name="search" size={15} />
+          <input
+            value={historySearch}
+            onChange={(e) => setHistorySearch(e.target.value)}
+            placeholder="Buscar por recibo (REC-0001), documento, titular o placa..."
+          />
+        </div>
+        <div className="filter-group">
+          <span>Desde</span>
+          <input
+            type="date"
+            value={historyDesde}
+            max={historyHasta || undefined}
+            onChange={(e) => setHistoryDesde(e.target.value)}
+            style={{ height: '38px', padding: '0 10px', borderRadius: '10px', border: '1px solid #CBD5E1' }}
+          />
+          <span>Hasta</span>
+          <input
+            type="date"
+            value={historyHasta}
+            min={historyDesde || undefined}
+            onChange={(e) => setHistoryHasta(e.target.value)}
+            style={{ height: '38px', padding: '0 10px', borderRadius: '10px', border: '1px solid #CBD5E1' }}
+          />
+        </div>
+        <div className="filter-stack">
+          <div className="filter-group">
+            <span>Forma de pago</span>
+            <div className="filter-pills">
+              {(['Todas', 'Efectivo', 'Transferencia', 'Tarjeta'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`filter-pill ${historyMethodFilter === m ? 'active' : ''}`}
+                  onClick={() => setHistoryMethodFilter(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="filter-group">
+            <span>Estado</span>
+            <div className="filter-pills">
+              {(['Todos', 'Registrado', 'Anulado'] as const).map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  className={`filter-pill ${historyStatusFilter === st ? 'active' : ''}`}
+                  onClick={() => setHistoryStatusFilter(st)}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {filteredHistoryPayments.length === 0 ? (
+        <div className="module-empty compact">
+          <p>No se encontraron pagos registrados con los filtros seleccionados.</p>
+        </div>
+      ) : (
+        <div className="module-table-wrap">
+          <table className="module-table">
+            <thead>
+              <tr>
+                <th>RECIBO</th>
+                <th>FECHA Y HORA</th>
+                <th>TITULAR</th>
+                <th>VEHÍCULO</th>
+                <th>PERÍODO CUBIERTO</th>
+                <th>FORMA PAGO</th>
+                <th>TOTAL</th>
+                <th>OPERARIO</th>
+                <th>ESTADO</th>
+                <th>ACCIONES</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredHistoryPayments.map((p) => {
+                const canAnnul = isLatestActivePaymentForPlate(p)
+                return (
+                  <tr key={p.id}>
+                    <td><span className="doc-pill">{p.consecutivo}</span></td>
+                    <td>{new Date(p.fechaHoraPago).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                    <td>
+                      <strong>{p.nombreTitular}</strong>
+                      <small style={{ display: 'block', color: '#64748B' }}>{p.documentoTipo} {p.documento}</small>
+                    </td>
+                    <td>
+                      <span className="vehicle-badge">
+                        <VehicleIcon tipo={p.tipoVehiculo} size={13} />
+                        <strong>{p.placa}</strong>
+                        <small>{p.tipoVehiculo}</small>
+                      </span>
+                    </td>
+                    <td>
+                      <strong>{formatDate(p.fechaInicio)} → {formatDate(p.fechaVencimiento)}</strong>
+                      <small style={{ display: 'block', color: '#64748B' }}>{p.meses} {p.meses === 1 ? 'mes (30 días)' : `meses (${p.meses * 30} días)`}</small>
+                    </td>
+                    <td>
+                      <strong>{p.formaPago}</strong>
+                      {p.referenciaPago && <small style={{ display: 'block', color: '#64748B' }}>Ref: {p.referenciaPago}</small>}
+                    </td>
+                    <td><strong>{formatCOP(p.totalPagado)}</strong></td>
+                    <td>{p.operario}</td>
+                    <td>
+                      <StatusBadge status={p.estado} />
+                      {p.estado === 'Anulado' && p.motivoAnulacion && (
+                        <small style={{ display: 'block', color: '#991B1B', marginTop: '4px', maxWidth: '180px' }}>
+                          Motivo: {p.motivoAnulacion}
+                        </small>
+                      )}
+                    </td>
+                    <td>
+                      <div className="action-stack">
+                        <button
+                          type="button"
+                          className="secondary-btn tiny"
+                          onClick={() => setReceiptModal({ payment: p, isCopy: true })}
+                        >
+                          <Icon name="printer" size={13} /> Ver / Reimprimir
+                        </button>
+                        {isAdmin && p.estado === 'Registrado' && (
+                          <button
+                            type="button"
+                            className="secondary-btn tiny danger"
+                            disabled={!canAnnul}
+                            title={
+                              canAnnul
+                                ? `Anular pago ${p.consecutivo} y revertir vigencia`
+                                : 'Solo se puede anular el último pago no anulado de este vehículo (RN-P07)'
+                            }
+                            onClick={() => {
+                              setAnnulModalPayment(p)
+                              setAnnulReason('')
+                              setAnnulError('')
+                            }}
+                          >
+                            <Icon name="ban" size={13} /> Anular pago
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+
+  // Lógica de Sub-vista 4: Cambio de tarifa (HU-P10) y Reporte de Recaudo (HU-P12)
+  const handleSaveTariffChange = (e: FormEvent) => {
+    e.preventDefault()
+    setTariffError('')
+    setTariffSuccess('')
+    if (!isAdmin) {
+      setTariffError('Solo el Administrador puede modificar las tarifas de mensualidad.')
+      return
+    }
+    const cleanValue = Number(tariffForm.nuevoValor.replace(/[^0-9]/g, ''))
+    if (!Number.isInteger(cleanValue) || cleanValue <= 0) {
+      setTariffError('El nuevo valor de la tarifa debe ser un número entero en COP mayor a 0.')
+      return
+    }
+    if (!tariffForm.fechaInicio || tariffForm.fechaInicio < todayYMD) {
+      setTariffError('La fecha de inicio de vigencia debe ser hoy o una fecha futura (nunca pasada).')
+      return
+    }
+    if (!tariffForm.motivo.trim()) {
+      setTariffError('El motivo del cambio de tarifa es obligatorio.')
+      return
+    }
+
+    const currentVal = tariffForm.tipo === 'Carro' ? effectiveCarTariff : effectiveMotoTariff
+    const nextId = tariffs.historial.reduce((max, h) => Math.max(max, h.id), 0) + 1
+    const newEntry = {
+      id: nextId,
+      tipo: tariffForm.tipo,
+      valorAnterior: currentVal,
+      valorNuevo: cleanValue,
+      fechaInicioVigencia: tariffForm.fechaInicio,
+      motivo: tariffForm.motivo.trim(),
+      usuarioResponsable: currentOperatorName,
+      fechaRegistro: new Date().toISOString(),
+    }
+
+    setTariffs((prev) => ({
+      ...prev,
+      Carro: tariffForm.tipo === 'Carro' && tariffForm.fechaInicio <= todayYMD ? cleanValue : prev.Carro,
+      Moto: tariffForm.tipo === 'Moto' && tariffForm.fechaInicio <= todayYMD ? cleanValue : prev.Moto,
+      historial: [newEntry, ...prev.historial],
+    }))
+    setTariffForm((prev) => ({ ...prev, nuevoValor: '', motivo: '' }))
+    setTariffSuccess(`Tarifa de ${tariffForm.tipo} actualizada a ${formatCOP(cleanValue)} con vigencia desde ${formatDate(tariffForm.fechaInicio)}.`)
+    onNotify(`Tarifa de ${tariffForm.tipo} registrada: ${formatCOP(cleanValue)}`)
+  }
+
+  // Validación y datos del Reporte de Recaudo (HU-P12)
+  const reportDateError = (() => {
+    if (!reportDesde || !reportHasta) return 'Selecciona la fecha inicial y la fecha final del reporte.'
+    if (reportHasta < reportDesde) return 'La fecha final no puede ser anterior a la fecha inicial.'
+    if (reportHasta > todayYMD || reportDesde > todayYMD) return 'Las fechas del reporte no pueden ser futuras.'
+    return ''
+  })()
+
+  const reportPayments = payments.filter((p) => {
+    if (reportDateError) return false
+    const day = isoToColombiaYMD(p.fechaHoraPago)
+    if (day < reportDesde || day > reportHasta) return false
+    if (reportTypeFilter !== 'Todos' && p.tipoVehiculo !== reportTypeFilter) return false
+    if (reportMethodFilter !== 'Todas' && p.formaPago !== reportMethodFilter) return false
+    if (reportOperatorFilter !== 'Todos' && p.operario !== reportOperatorFilter) return false
+    return true
+  })
+
+  const reportValidPayments = reportPayments.filter((p) => p.estado === 'Registrado')
+  const reportAnnulledPayments = reportPayments.filter((p) => p.estado === 'Anulado')
+  const reportTotalCollected = reportValidPayments.reduce((acc, p) => acc + p.totalPagado, 0)
+  const reportTotalAnnulled = reportAnnulledPayments.reduce((acc, p) => acc + p.totalPagado, 0)
+
+  const summaryByDay = (() => {
+    const map = new Map<string, { count: number; total: number }>()
+    for (const p of reportValidPayments) {
+      const day = isoToColombiaYMD(p.fechaHoraPago)
+      const prev = map.get(day) ?? { count: 0, total: 0 }
+      map.set(day, { count: prev.count + 1, total: prev.total + p.totalPagado })
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]))
+  })()
+
+  const summaryByType = (['Carro', 'Moto'] as const).map((tipo) => {
+    const items = reportValidPayments.filter((p) => p.tipoVehiculo === tipo)
+    return { tipo, count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
+  })
+
+  const summaryByMethod = (['Efectivo', 'Transferencia', 'Tarjeta'] as const).map((forma) => {
+    const items = reportValidPayments.filter((p) => p.formaPago === forma)
+    return { forma, count: items.length, total: items.reduce((acc, p) => acc + p.totalPagado, 0) }
+  })
+
+  const summaryByOperator = (() => {
+    const map = new Map<string, { count: number; total: number }>()
+    for (const p of reportValidPayments) {
+      const prev = map.get(p.operario) ?? { count: 0, total: 0 }
+      map.set(p.operario, { count: prev.count + 1, total: prev.total + p.totalPagado })
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1].total - a[1].total)
+  })()
+
+  const handleExportCSV = () => {
+    if (reportDateError) return
+    const lines: string[] = [
+      'REPORTE DE RECAUDO - PARQUEADERO AUTOS COLOMBIA (MEDELLIN)',
+      `Periodo;${reportDesde};a;${reportHasta}`,
+      `Total recaudado (COP);${reportTotalCollected};Pagos validos;${reportValidPayments.length};Pagos anulados (aparte);${reportAnnulledPayments.length}`,
+      '',
+      'RESUMEN POR TIPO DE VEHICULO',
+      'Tipo;Cantidad de pagos;Total recaudado (COP)',
+      ...summaryByType.map((r) => `${r.tipo};${r.count};${r.total}`),
+      '',
+      'RESUMEN POR FORMA DE PAGO',
+      'Forma de pago;Cantidad de pagos;Total recaudado (COP)',
+      ...summaryByMethod.map((r) => `${r.forma};${r.count};${r.total}`),
+      '',
+      'RESUMEN POR OPERARIO',
+      'Operario;Cantidad de pagos;Total recaudado (COP)',
+      ...summaryByOperator.map(([op, r]) => `${op};${r.count};${r.total}`),
+      '',
+      'DETALLE DE PAGOS DEL PERIODO',
+      'Consecutivo;Fecha y Hora;Documento;Titular;Placa;Tipo;Meses;Inicio Vigencia;Fin Vigencia;Forma de Pago;Referencia;Total (COP);Operario;Estado;Motivo Anulacion',
+      ...reportPayments.map((p) =>
+        [
+          p.consecutivo,
+          new Date(p.fechaHoraPago).toLocaleString('es-CO'),
+          `${p.documentoTipo} ${p.documento}`,
+          p.nombreTitular,
+          p.placa,
+          p.tipoVehiculo,
+          p.meses,
+          p.fechaInicio,
+          p.fechaVencimiento,
+          p.formaPago,
+          p.referenciaPago ?? '',
+          p.totalPagado,
+          p.operario,
+          p.estado,
+          p.motivoAnulacion ?? '',
+        ].join(';'),
+      ),
+    ]
+    const csvContent = '\uFEFF' + lines.join('\r\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `recaudo_parqueate_${reportDesde}_a_${reportHasta}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    onNotify('Archivo Excel (.csv) exportado correctamente')
+  }
+
+  // Render Sub-vista 4: Tarifas y Recaudo
+  const renderTariffsAndReportsView = () => (
+    <div className="module-panel">
+      {/* Bloque 1: Gestión de Tarifas (HU-P10) */}
+      <div className="module-panel-head">
+        <div>
+          <h2>Tarifas vigentes de mensualidad</h2>
+          <p className="detail-hint">
+            Valores aplicados por cada período de 30 días calendario. Los cambios de tarifa nunca alteran pagos anteriores (RN-P09).
+          </p>
+        </div>
+      </div>
+
+      <div className="module-summary-grid">
+        <div className="module-summary-card">
+          <div className="module-summary-icon green" />
+          <div className="module-summary-copy">
+            <strong className="type-line"><VehicleIcon tipo="Carro" size={16} /> Tarifa Mensual Carro: {formatCOP(effectiveCarTariff)}</strong>
+            <small>2 meses: {formatCOP(effectiveCarTariff * 2)} · 3 meses: {formatCOP(effectiveCarTariff * 3)}</small>
+          </div>
+        </div>
+        <div className="module-summary-card">
+          <div className="module-summary-icon amber" />
+          <div className="module-summary-copy">
+            <strong className="type-line"><VehicleIcon tipo="Moto" size={16} /> Tarifa Mensual Moto: {formatCOP(effectiveMotoTariff)}</strong>
+            <small>2 meses: {formatCOP(effectiveMotoTariff * 2)} · 3 meses: {formatCOP(effectiveMotoTariff * 3)}</small>
+          </div>
+        </div>
+      </div>
+
+      {!isAdmin ? (
+        <div className="permission-note">
+          Modo solo lectura: Solo el perfil de Administrador puede actualizar las tarifas de mensualidad o consultar el reporte consolidado de recaudo.
+        </div>
+      ) : (
+        <form className="payment-column-card" onSubmit={handleSaveTariffChange}>
+          <h3>Actualizar tarifa mensual (Solo Administrador)</h3>
+          {tariffError && <div className="notice notice-red"><Icon name="alert" size={16} /><span>{tariffError}</span></div>}
+          {tariffSuccess && <div className="notice notice-green"><Icon name="check" size={16} /><span>{tariffSuccess}</span></div>}
+          <div className="form-grid">
+            <div className="field">
+              <label>Tipo de vehículo</label>
+              <select
+                value={tariffForm.tipo}
+                onChange={(e) => setTariffForm((prev) => ({ ...prev, tipo: e.target.value as VehicleType }))}
+              >
+                <option value="Carro">Carro (actual: {formatCOP(effectiveCarTariff)})</option>
+                <option value="Moto">Moto (actual: {formatCOP(effectiveMotoTariff)})</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Nuevo valor mensual en COP (entero &gt; 0)</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={tariffForm.nuevoValor ? Number(tariffForm.nuevoValor.replace(/[^0-9]/g, '')).toLocaleString('es-CO') : ''}
+                onChange={(e) => setTariffForm((prev) => ({ ...prev, nuevoValor: e.target.value.replace(/[^0-9]/g, '') }))}
+                placeholder="Ej. 130.000"
+              />
+            </div>
+            <div className="field">
+              <label>Fecha de inicio de vigencia (hoy o futura)</label>
+              <input
+                type="date"
+                value={tariffForm.fechaInicio}
+                min={todayYMD}
+                onChange={(e) => setTariffForm((prev) => ({ ...prev, fechaInicio: e.target.value }))}
+              />
+            </div>
+            <div className="field">
+              <label>Motivo obligatorio del cambio</label>
+              <input
+                value={tariffForm.motivo}
+                onChange={(e) => setTariffForm((prev) => ({ ...prev, motivo: e.target.value }))}
+                placeholder="Ej. Ajuste anual de tarifa aprobado por gerencia"
+              />
+            </div>
+          </div>
+          <div>
+            <button type="submit" className="primary-btn">Guardar nueva tarifa</button>
+          </div>
+        </form>
+      )}
+
+      <div className="history-list">
+        <h4>Historial de cambios de tarifa</h4>
+        <div className="history-scroll">
+          {tariffs.historial.map((h) => (
+            <div key={h.id} className="history-item">
+              <div>
+                <strong className="type-line">
+                  <VehicleIcon tipo={h.tipo} size={14} /> {h.tipo}: {formatCOP(h.valorAnterior)} → {formatCOP(h.valorNuevo)}
+                </strong>
+                <small>Vigencia desde: {formatDate(h.fechaInicioVigencia)} · Registrado: {new Date(h.fechaRegistro).toLocaleString('es-CO')}</small>
+              </div>
+              <div className="history-meta">
+                <span>Responsable: {h.usuarioResponsable}</span>
+                <p>{h.motivo}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {isAdmin && (
+        <>
+          <div className="section-divider" />
+
+          {/* Bloque 2: Reporte de Recaudo (HU-P12 — Solo Administrador) */}
+          <div className="module-panel-head">
+            <div>
+              <h2>Reporte de recaudo por período</h2>
+              <p className="detail-hint">
+                Análisis financiero detallado por día, tipo de vehículo, medio de pago y operario.
+              </p>
+            </div>
+            <div className="detail-actions">
+              <button
+                type="button"
+                className="secondary-btn"
+                disabled={!!reportDateError}
+                onClick={handleExportCSV}
+              >
+                <Icon name="download" size={15} /> Exportar Excel (.csv)
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={!!reportDateError}
+                onClick={() => window.print()}
+              >
+                <Icon name="printer" size={15} /> Exportar PDF / Imprimir
+              </button>
+            </div>
+          </div>
+
+          <div className="module-toolbar">
+            <div className="filter-group">
+              <span>Fecha inicial</span>
+              <input
+                type="date"
+                value={reportDesde}
+                max={todayYMD}
+                onChange={(e) => setReportDesde(e.target.value)}
+                style={{ height: '38px', padding: '0 10px', borderRadius: '10px', border: '1px solid #CBD5E1' }}
+              />
+              <span>Fecha final</span>
+              <input
+                type="date"
+                value={reportHasta}
+                min={reportDesde || undefined}
+                max={todayYMD}
+                onChange={(e) => setReportHasta(e.target.value)}
+                style={{ height: '38px', padding: '0 10px', borderRadius: '10px', border: '1px solid #CBD5E1' }}
+              />
+            </div>
+            <div className="filter-group">
+              <span>Tipo</span>
+              <select
+                value={reportTypeFilter}
+                onChange={(e) => setReportTypeFilter(e.target.value as 'Todos' | VehicleType)}
+                style={{ height: '38px', borderRadius: '10px', padding: '0 12px', border: '1px solid #CBD5E1' }}
+              >
+                <option value="Todos">Todos</option>
+                <option value="Carro">Carro</option>
+                <option value="Moto">Moto</option>
+              </select>
+              <span>Forma de pago</span>
+              <select
+                value={reportMethodFilter}
+                onChange={(e) => setReportMethodFilter(e.target.value as 'Todas' | PaymentMethod)}
+                style={{ height: '38px', borderRadius: '10px', padding: '0 12px', border: '1px solid #CBD5E1' }}
+              >
+                <option value="Todas">Todas</option>
+                <option value="Efectivo">Efectivo</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Tarjeta">Tarjeta</option>
+              </select>
+              <span>Operario</span>
+              <select
+                value={reportOperatorFilter}
+                onChange={(e) => setReportOperatorFilter(e.target.value)}
+                style={{ height: '38px', borderRadius: '10px', padding: '0 12px', border: '1px solid #CBD5E1' }}
+              >
+                <option value="Todos">Todos</option>
+                {allOperators.map((op) => (
+                  <option key={op} value={op}>{op}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {reportDateError ? (
+            <div className="notice notice-red">
+              <Icon name="alert" size={16} />
+              <span>{reportDateError}</span>
+            </div>
+          ) : (
+            <>
+              <div className="kpi-grid-4">
+                <div className="kpi-card highlight">
+                  <span>Total recaudado en el período</span>
+                  <strong>{formatCOP(reportTotalCollected)}</strong>
+                  <small>Del {formatDate(reportDesde)} al {formatDate(reportHasta)}</small>
+                </div>
+                <div className="kpi-card">
+                  <span>Cantidad de pagos válidos</span>
+                  <strong>{reportValidPayments.length}</strong>
+                  <small>Comprobantes en estado Registrado</small>
+                </div>
+                <div className="kpi-card">
+                  <span>Promedio por transacción</span>
+                  <strong>{formatCOP(reportValidPayments.length ? reportTotalCollected / reportValidPayments.length : 0)}</strong>
+                  <small>Ticket promedio del período</small>
+                </div>
+                <div className="kpi-card muted-danger">
+                  <span>Pagos anulados (aparte)</span>
+                  <strong>{reportAnnulledPayments.length} anulados</strong>
+                  <small>{formatCOP(reportTotalAnnulled)} excluidos del recaudo</small>
+                </div>
+              </div>
+
+              <div className="reports-summary-grid">
+                <div className="report-mini-card">
+                  <h4>Resumen por día</h4>
+                  <table className="module-table">
+                    <thead><tr><th>FECHA</th><th>PAGOS</th><th>TOTAL RECAUDADO</th></tr></thead>
+                    <tbody>
+                      {summaryByDay.length === 0 ? (
+                        <tr><td colSpan={3} className="table-message">Sin pagos en este rango</td></tr>
+                      ) : (
+                        summaryByDay.map(([day, info]) => (
+                          <tr key={day}>
+                            <td><strong>{formatDate(day)}</strong></td>
+                            <td>{info.count}</td>
+                            <td><strong>{formatCOP(info.total)}</strong></td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="report-mini-card">
+                  <h4>Resumen por tipo de vehículo</h4>
+                  <table className="module-table">
+                    <thead><tr><th>TIPO</th><th>PAGOS</th><th>TOTAL RECAUDADO</th></tr></thead>
+                    <tbody>
+                      {summaryByType.map((row) => (
+                        <tr key={row.tipo}>
+                          <td><span className="type-line"><VehicleIcon tipo={row.tipo} size={14} /><strong>{row.tipo}</strong></span></td>
+                          <td>{row.count}</td>
+                          <td><strong>{formatCOP(row.total)}</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="report-mini-card">
+                  <h4>Resumen por forma de pago</h4>
+                  <table className="module-table">
+                    <thead><tr><th>FORMA DE PAGO</th><th>PAGOS</th><th>TOTAL RECAUDADO</th></tr></thead>
+                    <tbody>
+                      {summaryByMethod.map((row) => (
+                        <tr key={row.forma}>
+                          <td><strong>{row.forma}</strong></td>
+                          <td>{row.count}</td>
+                          <td><strong>{formatCOP(row.total)}</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="report-mini-card">
+                  <h4>Resumen por operario</h4>
+                  <table className="module-table">
+                    <thead><tr><th>OPERARIO</th><th>PAGOS</th><th>TOTAL RECAUDADO</th></tr></thead>
+                    <tbody>
+                      {summaryByOperator.length === 0 ? (
+                        <tr><td colSpan={3} className="table-message">Sin registros</td></tr>
+                      ) : (
+                        summaryByOperator.map(([op, info]) => (
+                          <tr key={op}>
+                            <td><strong>{op}</strong></td>
+                            <td>{info.count}</td>
+                            <td><strong>{formatCOP(info.total)}</strong></td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  )
+
+  return (
+    <section className="module-shell module-payments">
+      <div className="module-card">
+        {subView === 'charge'
+          ? renderChargeView()
+          : subView === 'expiring'
+            ? renderExpiringView()
+            : subView === 'history'
+              ? renderHistoryAndCashboxView()
+              : renderTariffsAndReportsView()}
+      </div>
+
+      {/* Modal 1: Comprobante de Pago (HU-P04) */}
+      {receiptModal && (
+        <div className="modal-backdrop printable-modal-backdrop" onMouseDown={() => setReceiptModal(null)}>
+          <div className="modal-card" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head no-print">
+              <div>
+                <h2>Comprobante de pago {receiptModal.payment.consecutivo}</h2>
+                <p>Recibo oficial de mensualidad · Parqueadero Autos Colombia</p>
+              </div>
+              <button className="icon-btn" onClick={() => setReceiptModal(null)} aria-label="Cerrar"><Icon name="x" /></button>
+            </div>
+            <div className="modal-body">
+              <div className="receipt-card">
+                <div className="receipt-header">
+                  <strong>PARQUEADERO AUTOS COLOMBIA — MEDELLÍN</strong>
+                  <span>Servicio de Estacionamiento por Mensualidad · Zona Horaria Colombia</span>
+                  <span>Fecha y hora de emisión: {new Date(receiptModal.payment.fechaHoraPago).toLocaleString('es-CO')}</span>
+                  <div className="receipt-consecutivo">{receiptModal.payment.consecutivo}</div>
+                </div>
+
+                {receiptModal.payment.estado === 'Anulado' ? (
+                  <div className="receipt-banner anulado">
+                    ANULADO · Motivo: {receiptModal.payment.motivoAnulacion} ({receiptModal.payment.usuarioAnulacion})
+                  </div>
+                ) : receiptModal.isCopy ? (
+                  <div className="receipt-banner copia">COPIA — REIMPRESIÓN DE COMPROBANTE</div>
+                ) : (
+                  <div className="receipt-banner original">COMPROBANTE ORIGINAL DE PAGO</div>
+                )}
+
+                <div className="receipt-rows">
+                  <div className="receipt-row">
+                    <span>Titular</span>
+                    <strong>{receiptModal.payment.nombreTitular}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Documento</span>
+                    <strong>{receiptModal.payment.documentoTipo} {receiptModal.payment.documento}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Vehículo</span>
+                    <strong>
+                      {receiptModal.payment.placa} · {receiptModal.payment.tipoVehiculo} ({receiptModal.payment.marcaVehiculo} {receiptModal.payment.colorVehiculo})
+                    </strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Meses pagados</span>
+                    <strong>
+                      {receiptModal.payment.meses} {receiptModal.payment.meses === 1 ? 'mes (30 días calendario)' : `meses (${receiptModal.payment.meses * 30} días calendario)`}
+                    </strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Período cubierto</span>
+                    <strong>
+                      {formatDate(receiptModal.payment.fechaInicio)} al {formatDate(receiptModal.payment.fechaVencimiento)} (23:59)
+                    </strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Tarifa mensual aplicada</span>
+                    <strong>{formatCOP(receiptModal.payment.tarifaMensualAplicada)}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Forma de pago</span>
+                    <strong>{receiptModal.payment.formaPago}</strong>
+                  </div>
+                  {receiptModal.payment.formaPago === 'Efectivo' && receiptModal.payment.valorRecibidoEfectivo !== null && (
+                    <>
+                      <div className="receipt-row">
+                        <span>Valor recibido en efectivo</span>
+                        <strong>{formatCOP(receiptModal.payment.valorRecibidoEfectivo)}</strong>
+                      </div>
+                      <div className="receipt-row">
+                        <span>Cambio devuelto</span>
+                        <strong>{formatCOP(receiptModal.payment.cambioDevueltoEfectivo ?? 0)}</strong>
+                      </div>
+                    </>
+                  )}
+                  {receiptModal.payment.referenciaPago && (
+                    <div className="receipt-row">
+                      <span>Referencia / Aprobación</span>
+                      <strong>{receiptModal.payment.referenciaPago}</strong>
+                    </div>
+                  )}
+                  <div className="receipt-row">
+                    <span>Operario que registró</span>
+                    <strong>{receiptModal.payment.operario}</strong>
+                  </div>
+                </div>
+
+                <div className="receipt-total-row">
+                  <span>Total pagado</span>
+                  <strong>{formatCOP(receiptModal.payment.totalPagado)}</strong>
+                </div>
+
+                <div className="receipt-footer">
+                  Conserve este comprobante. Su mensualidad garantiza su cupo activo hasta el {formatDate(receiptModal.payment.fechaVencimiento)} a las 23:59.
+                </div>
+              </div>
+            </div>
+            <div className="modal-actions no-print">
+              <button type="button" className="secondary-btn" onClick={() => setReceiptModal(null)}>Cerrar</button>
+              <button type="button" className="primary-btn" onClick={() => window.print()}>
+                <Icon name="printer" size={15} /> Imprimir comprobante
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 2: Anular Pago (HU-P09 — Solo Administrador y solo último pago vigente) */}
+      {annulModalPayment && (
+        <div className="modal-backdrop" onMouseDown={() => setAnnulModalPayment(null)}>
+          <div className="modal-card" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <h2>Anular pago {annulModalPayment.consecutivo}</h2>
+                <p>Vehículo {annulModalPayment.placa} · Titular: {annulModalPayment.nombreTitular}</p>
+              </div>
+              <button className="icon-btn" onClick={() => setAnnulModalPayment(null)} aria-label="Cerrar"><Icon name="x" /></button>
+            </div>
+            <div className="modal-body">
+              <div className="notice notice-red">
+                <Icon name="alert" size={18} />
+                <span>
+                  Esta acción marcará el recibo <strong>{annulModalPayment.consecutivo}</strong> por <strong>{formatCOP(annulModalPayment.totalPagado)}</strong> como <strong>Anulado</strong> y revertirá automáticamente la vigencia del vehículo{' '}
+                  {annulModalPayment.fechaVencimientoAnterior
+                    ? `a su fecha anterior (${formatDate(annulModalPayment.fechaVencimientoAnterior)})`
+                    : 'a estado "Sin mensualidad"'}.
+                </span>
+              </div>
+              <div className="field">
+                <label>Motivo obligatorio de anulación</label>
+                <textarea
+                  rows={3}
+                  value={annulReason}
+                  onChange={(e) => {
+                    setAnnulReason(e.target.value)
+                    setAnnulError('')
+                  }}
+                  placeholder="Ej. Error en número de meses seleccionados o medio de pago equivocado..."
+                  autoFocus
+                />
+              </div>
+              {annulError && (
+                <div className="notice notice-red">
+                  <Icon name="alert" size={16} />
+                  <span>{annulError}</span>
+                </div>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="secondary-btn" onClick={() => setAnnulModalPayment(null)}>Cancelar</button>
+              <button type="button" className="secondary-btn danger" onClick={handleConfirmAnnulPayment}>
+                <Icon name="ban" size={15} /> Confirmar anulación
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 3: Impresión de Cierre de Caja del Día (HU-P11) */}
+      {cashboxPrintOpen && (
+        <div className="modal-backdrop printable-modal-backdrop" onMouseDown={() => setCashboxPrintOpen(false)}>
+          <div className="modal-card" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head no-print">
+              <div>
+                <h2>Cierre de caja del día</h2>
+                <p>Resumen listo para impresión · {formatDate(todayYMD)}</p>
+              </div>
+              <button className="icon-btn" onClick={() => setCashboxPrintOpen(false)} aria-label="Cerrar"><Icon name="x" /></button>
+            </div>
+            <div className="modal-body">
+              <div className="receipt-card">
+                <div className="receipt-header">
+                  <strong>PARQUEADERO AUTOS COLOMBIA — MEDELLÍN</strong>
+                  <span>CIERRE DE CAJA DIARIO · {formatDate(todayYMD)}</span>
+                  <span>Filtro de operario: {effectiveCashboxOperator}</span>
+                </div>
+                <div className="receipt-rows">
+                  <div className="receipt-row">
+                    <span>Pagos válidos registrados hoy</span>
+                    <strong>{todayValidPayments.length}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Efectivo ({todayByMethod('Efectivo').count})</span>
+                    <strong>{formatCOP(todayByMethod('Efectivo').total)}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Transferencia ({todayByMethod('Transferencia').count})</span>
+                    <strong>{formatCOP(todayByMethod('Transferencia').total)}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Tarjeta ({todayByMethod('Tarjeta').count})</span>
+                    <strong>{formatCOP(todayByMethod('Tarjeta').total)}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Recaudo Carros ({todayByType('Carro').count})</span>
+                    <strong>{formatCOP(todayByType('Carro').total)}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Recaudo Motos ({todayByType('Moto').count})</span>
+                    <strong>{formatCOP(todayByType('Moto').total)}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Pagos anulados hoy (excluidos)</span>
+                    <strong>{todayAnnulledPayments.length} ({formatCOP(todayTotalAnnulled)})</strong>
+                  </div>
+                </div>
+                <div className="receipt-total-row">
+                  <span>Total neto recaudado hoy</span>
+                  <strong>{formatCOP(todayTotalCollected)}</strong>
+                </div>
+                <div className="receipt-footer">
+                  Generado por {currentOperatorName} el {new Date().toLocaleString('es-CO')}
+                </div>
+              </div>
+            </div>
+            <div className="modal-actions no-print">
+              <button type="button" className="secondary-btn" onClick={() => setCashboxPrintOpen(false)}>Cerrar</button>
+              <button type="button" className="primary-btn" onClick={() => window.print()}>
+                <Icon name="printer" size={15} /> Imprimir cierre
+              </button>
             </div>
           </div>
         </div>

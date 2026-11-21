@@ -2882,3 +2882,551 @@ table { width: 100%; border-collapse: collapse; font-size: 10px; }th { backgroun
 .detail-hint { margin: 8px 0 0; font-size: 12px; color: #64748B; }
 .detail-actions .secondary-btn { display: inline-flex; align-items: center; gap: 6px; }
 .detail-actions button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ============================================================================
+   MÓDULO 3: GESTIÓN DE PAGOS DE MENSUALIDADES, COMPROBANTES Y RECAUDO
+   ============================================================================ */
+
+.module-subnav button span.badge-warn {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
+.module-subnav button span.badge-danger {
+  background: #FEE2E2;
+  color: #991B1B;
+}
+
+.payment-charge-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.15fr);
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .payment-charge-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.payment-column-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid #E2E8F0;
+  border-radius: 20px;
+  background: #F8FAFC;
+}
+
+.payment-column-card h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #0F172A;
+  letter-spacing: -.02em;
+}
+
+.payment-user-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 250px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.payment-user-option {
+  width: 100%;
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all .16s ease;
+}
+
+.payment-user-option:hover {
+  border-color: #94A3B8;
+  transform: translateY(-1px);
+}
+
+.payment-user-option.selected {
+  border: 2px solid #0F172A;
+  background: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .07);
+}
+
+.payment-user-option strong {
+  display: block;
+  font-size: 14px;
+  color: #0F172A;
+}
+
+.payment-user-option small {
+  display: block;
+  font-size: 12px;
+  color: #64748B;
+  margin-top: 2px;
+}
+
+.payment-user-card {
+  padding: 16px;
+  border-radius: 16px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.payment-user-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.payment-vehicle-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.payment-vehicle-card {
+  width: 100%;
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: all .16s ease;
+}
+
+.payment-vehicle-card:hover {
+  border-color: #94A3B8;
+}
+
+.payment-vehicle-card.selected {
+  border: 2px solid #0F172A;
+  background: #F8FAFC;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, .06);
+}
+
+.payment-vehicle-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.payment-vehicle-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #475569;
+}
+
+.sub-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sub-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sub-badge.al-dia {
+  background: #ECFDF5;
+  color: #065F46;
+  border: 1px solid #A7F3D0;
+}
+
+.sub-badge.por-vencer {
+  background: #FFFBEB;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+
+.sub-badge.vencida {
+  background: #FEF2F2;
+  color: #991B1B;
+  border: 1px solid #FECACA;
+}
+
+.sub-badge.sin-mensualidad {
+  background: #F1F5F9;
+  color: #475569;
+  border: 1px solid #CBD5E1;
+}
+
+.settlement-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+}
+
+.settlement-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settlement-item span {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #64748B;
+}
+
+.settlement-item strong {
+  font-size: 15px;
+  color: #0F172A;
+}
+
+.settlement-item.total strong {
+  font-size: 22px;
+  color: #065F46;
+  letter-spacing: -.03em;
+}
+
+.settlement-item.full {
+  grid-column: 1 / -1;
+  padding-top: 8px;
+  border-top: 1px dashed #E2E8F0;
+}
+
+.settlement-item small {
+  font-size: 12px;
+  color: #64748B;
+}
+
+.quick-cash-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.quick-cash-pill {
+  border: 1px solid #CBD5E1;
+  background: #FFFFFF;
+  color: #334155;
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .14s ease;
+}
+
+.quick-cash-pill:hover {
+  background: #0F172A;
+  color: #FFFFFF;
+  border-color: #0F172A;
+}
+
+.cash-change-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #ECFDF5;
+  border: 1px solid #A7F3D0;
+  color: #065F46;
+}
+
+.cash-change-box.insufficient {
+  background: #FEF2F2;
+  border-color: #FECACA;
+  color: #991B1B;
+}
+
+.cash-change-box span {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.cash-change-box strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.kpi-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.kpi-card {
+  padding: 18px;
+  border-radius: 16px;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kpi-card.highlight {
+  background: #ECFDF5;
+  border-color: #A7F3D0;
+}
+
+.kpi-card.muted-danger {
+  background: #FEF2F2;
+  border-color: #FECACA;
+}
+
+.kpi-card > span {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: #64748B;
+}
+
+.kpi-card.highlight > span {
+  color: #065F46;
+}
+
+.kpi-card.muted-danger > span {
+  color: #991B1B;
+}
+
+.kpi-card > strong {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0F172A;
+  letter-spacing: -.03em;
+}
+
+.kpi-card > small {
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.4;
+}
+
+.section-divider {
+  height: 1px;
+  background: #E2E8F0;
+  margin: 24px 0;
+}
+
+.reports-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .reports-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.report-mini-card {
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  background: #FFFFFF;
+  overflow: hidden;
+}
+
+.report-mini-card h4 {
+  margin: 0;
+  padding: 13px 16px;
+  background: #F8FAFC;
+  border-bottom: 1px solid #E2E8F0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+/* Modal de Comprobante / Recibo (HU-P04) */
+.receipt-card {
+  padding: 24px;
+  border: 1px dashed #94A3B8;
+  border-radius: 18px;
+  background: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.receipt-header {
+  text-align: center;
+  border-bottom: 1px dashed #CBD5E1;
+  padding-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.receipt-header strong {
+  font-size: 16px;
+  letter-spacing: .04em;
+  color: #0F172A;
+}
+
+.receipt-header span {
+  font-size: 12px;
+  color: #64748B;
+}
+
+.receipt-consecutivo {
+  display: inline-flex;
+  align-self: center;
+  margin-top: 4px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #0F172A;
+  color: #FFFFFF;
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.receipt-banner {
+  text-align: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.receipt-banner.original {
+  background: #ECFDF5;
+  color: #065F46;
+  border: 1px solid #A7F3D0;
+}
+
+.receipt-banner.copia {
+  background: #FFFBEB;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+
+.receipt-banner.anulado {
+  background: #FEF2F2;
+  color: #991B1B;
+  border: 1px solid #FECACA;
+}
+
+.receipt-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.receipt-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.receipt-row span {
+  color: #64748B;
+}
+
+.receipt-row strong {
+  color: #0F172A;
+  text-align: right;
+}
+
+.receipt-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 2px solid #0F172A;
+}
+
+.receipt-total-row span {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #0F172A;
+}
+
+.receipt-total-row strong {
+  font-size: 20px;
+  font-weight: 800;
+  color: #065F46;
+}
+
+.receipt-footer {
+  text-align: center;
+  padding-top: 10px;
+  border-top: 1px dashed #CBD5E1;
+  font-size: 11.5px;
+  color: #64748B;
+}
+
+/* Reglas de impresión limpia para recibos y cierre de caja */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .printable-modal-backdrop,
+  .printable-modal-backdrop * {
+    visibility: visible !important;
+  }
+  .printable-modal-backdrop {
+    position: absolute !important;
+    inset: 0 !important;
+    background: #FFFFFF !important;
+    display: flex !important;
+    align-items: flex-start !important;
+    justify-content: center !important;
+    padding: 16px !important;
+    box-shadow: none !important;
+  }
+  .printable-modal-backdrop .modal-card {
+    box-shadow: none !important;
+    border: none !important;
+    max-height: none !important;
+    width: 100% !important;
+    max-width: 540px !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
