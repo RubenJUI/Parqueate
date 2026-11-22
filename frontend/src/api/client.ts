@@ -68,14 +68,63 @@ const patch = <T,>(path: string, data: unknown) => request<T>(path, { method: 'P
 const del = <T,>(path: string, data?: unknown) =>
   request<T>(path, data === undefined ? { method: 'DELETE' } : { method: 'DELETE', body: JSON.stringify(data) })
 
+export type StaffRole = 'Administrador' | 'Operario'
+export type StaffStatus = 'Activo' | 'Inactivo'
+
+export type StaffAccount = {
+  id: number
+  nombre: string
+  correo: string
+  rol: StaffRole
+  estado: StaffStatus
+  motivo_inactivacion: string | null
+  fecha_creacion: string
+}
+
 export async function login(correo: string, contrasena: string): Promise<User> {
-  const form = new URLSearchParams({ username: correo, password: contrasena })
-  const { access_token } = await request<{ access_token: string }>('/auth/token', { method: 'POST', body: form })
-  setToken(access_token)
-  return getMe()
+  const res = await post<{
+    id: number
+    id_usuario: number
+    nombre: string
+    correo: string
+    rol: StaffRole
+    estado: StaffStatus
+    token: string
+    access_token: string
+    token_type: string
+  }>('/api/auth/login', { correo, contrasena })
+  setToken(res.access_token || res.token)
+  return {
+    id_usuario: res.id_usuario ?? res.id,
+    nombre: res.nombre,
+    correo: res.correo,
+    rol: res.rol,
+    estado: res.estado === 'Activo',
+  }
 }
 
 export const logout = () => setToken(null)
+
+export const getStaffAccounts = () => request<StaffAccount[]>('/api/personal')
+export const createStaffAccount = (data: {
+  nombre: string
+  correo: string
+  contrasena: string
+  rol: StaffRole
+}) => post<StaffAccount>('/api/personal', data)
+export const updateStaffAccount = (
+  id: number,
+  data: {
+    nombre: string
+    correo: string
+    rol: StaffRole
+    contrasena?: string | null
+  },
+) => put<StaffAccount>(`/api/personal/${id}`, data)
+export const toggleStaffAccountStatus = (
+  id: number,
+  data: { estado: StaffStatus; motivo: string },
+) => patch<StaffAccount>(`/api/personal/${id}/estado`, data)
 
 export const checkHealth = () => request<{ status: string }>('/')
 export const getMe = () => request<User>('/api/usuarios/me')

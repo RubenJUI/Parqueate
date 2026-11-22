@@ -206,3 +206,16 @@ CREATE TABLE IF NOT EXISTS auditoria_reporte (
 CREATE INDEX IF NOT EXISTS ix_pago_mensualidad_placa ON pago_mensualidad (placa_vehiculo, id DESC);
 CREATE INDEX IF NOT EXISTS ix_pago_mensualidad_fecha ON pago_mensualidad (fecha_registro DESC, id DESC);
 CREATE INDEX IF NOT EXISTS ix_tarifa_mensualidad_tipo ON tarifa_mensualidad (tipo_vehiculo, fecha_inicio DESC, id DESC);
+
+-- Tabla de Cuentas del Personal (Modulo de Autenticacion y Personal: RF-A01, RF-A02, HU-P13, HU-P14)
+-- Independiente de la tabla propietario (clientes del parqueadero).
+CREATE TABLE IF NOT EXISTS cuenta_personal (
+    id SERIAL PRIMARY KEY,
+    nombre VARCHAR(120) NOT NULL,
+    correo VARCHAR(120) UNIQUE NOT NULL,
+    contrasena_hash TEXT NOT NULL,
+    rol VARCHAR(20) NOT NULL CHECK (rol IN ('Administrador', 'Operario')),
+    estado VARCHAR(20) NOT NULL DEFAULT 'Activo' CHECK (estado IN ('Activo', 'Inactivo')),
+    motivo_inactivacion TEXT,
+    fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

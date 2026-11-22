@@ -12,6 +12,7 @@ import {
   createModule2User,
   createModule3Payment,
   createModule3Tariff,
+  createStaffAccount,
   deleteModule2Cell,
   deleteModule2User,
   deleteModule2Vehicle,
@@ -29,6 +30,7 @@ import {
   getModule3Report,
   getModule3Tariffs,
   getOccupancy,
+  getStaffAccounts,
   getToken,
   getVehicleSubscriptionInfo,
   initializeModule2Cells,
@@ -52,8 +54,10 @@ import {
   todayColombiaYMD,
   toggleModule2UserStatus,
   toggleModule2VehicleStatus,
+  toggleStaffAccountStatus,
   updateModule2Cell,
   updateModule2User,
+  updateStaffAccount,
 } from './api/client'
 import type { Cell, EntryResult, Occupancy, Ticket, User, VehicleLookup, VehicleType } from './domain/parking'
 import type {
@@ -62,6 +66,9 @@ import type {
   PaymentMethod,
   PaymentRecord,
   PaymentStatus,
+  StaffAccount,
+  StaffRole,
+  StaffStatus,
   SubscriptionState,
   TariffsState,
   UserRecord,
@@ -101,6 +108,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     calendar: <><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>,
     receipt: <><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z" /><path d="M8 9h8M8 13h8M8 17h5" /></>,
     dollar: <><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></>,
+    shield: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></>,
   }
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{paths[name]}</svg>
 }
@@ -197,6 +205,31 @@ export default function App() {
     getMe().then(setUser).catch(() => logout()).finally(() => setCheckingSession(false))
   }, [])
 
+  // RNF-A01: Expiración automática de sesión tras 30 minutos de inactividad.
+  useEffect(() => {
+    if (!user) return
+    const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000
+    let timeoutId = window.setTimeout(() => {
+      logout()
+      setUser(null)
+    }, INACTIVITY_TIMEOUT_MS)
+
+    const resetTimer = () => {
+      window.clearTimeout(timeoutId)
+      timeoutId = window.setTimeout(() => {
+        logout()
+        setUser(null)
+      }, INACTIVITY_TIMEOUT_MS)
+    }
+
+    const events: Array<keyof WindowEventMap> = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll']
+    events.forEach((evt) => window.addEventListener(evt, resetTimer, { passive: true }))
+    return () => {
+      window.clearTimeout(timeoutId)
+      events.forEach((evt) => window.removeEventListener(evt, resetTimer))
+    }
+  }, [user])
+
   if (checkingSession) return null
   if (!user) return <Login onLogin={setUser} />
   return (
@@ -215,7 +248,7 @@ export default function App() {
   )
 }
 
-type ActiveTab = 'console' | 'inside' | 'history' | 'users' | 'payments'
+type ActiveTab = 'console' | 'inside' | 'history' | 'users' | 'payments' | 'personal'
 type UsersSubView = 'directory' | 'map' | 'register'
 type CellTypeFilterOption = 'Todas' | 'Carros' | 'Motos'
 type CellStateFilterOption = 'Todos' | 'Libre' | 'Ocupada' | 'Fuera de servicio'
@@ -249,12 +282,18 @@ function Operations({
   // Se incrementa después de cada movimiento para que las vistas vuelvan a consultar la API.
   const [version, setVersion] = useState(0)
   const [toast, setToast] = useState('')
-  const [profileOpen, setProfileOpen] = useState(false)
-  const [roleMode, setRoleMode] = useState<'Operario' | 'Administrador'>(user.rol === 'Administrador' ? 'Administrador' : 'Operario')
+  const roleMode: 'Operario' | 'Administrador' = user.rol === 'Administrador' ? 'Administrador' : 'Operario'
   const [usersSubView, setUsersSubView] = useState<UsersSubView>('directory')
   const [paymentsSubView, setPaymentsSubView] = useState<PaymentsSubView>('charge')
   const [cellTypeFilter, setCellTypeFilter] = useState<CellTypeFilterOption>('Todas')
   const [cellStateFilter, setCellStateFilter] = useState<CellStateFilterOption>('Todos')
+
+  // RF-A02: Si el usuario autenticado es Operario, nunca puede permanecer en el módulo Personal.
+  useEffect(() => {
+    if (user.rol !== 'Administrador' && opTab === 'personal') {
+      setOpTab('console')
+    }
+  }, [user.rol, opTab])
 
   const refreshOperationalState = useCallback(() => {
     getOccupancy().then(setOccupancy).catch(() => {})
@@ -375,14 +414,13 @@ function Operations({
             onNotify={notify}
           />
         )}
+        {opTab === 'personal' && user.rol === 'Administrador' && (
+          <PersonalModule currentUser={user} onNotify={notify} />
+        )}
       </div>
     </main>
 
     <div className="floating-dock-wrap">
-      {profileOpen && <div className="profile-popover">
-        <div className="profile-popover-head"><div className="avatar">{initials(user.nombre)}</div><div><strong>{user.nombre}</strong><span>{roleLabel(user)}</span></div></div>
-        <button className="popover-logout" onClick={onLogout}><Icon name="logout" size={16} />Cerrar sesión</button>
-      </div>}
       <nav className="floating-dock" aria-label="Navegación principal">
         <button className="dock-logo" onClick={() => setOpTab('console')} aria-label="Inicio"><img src="/logo.svg" alt="" /></button>
         <span className="dock-divider" />
@@ -390,14 +428,24 @@ function Operations({
           <button aria-label="Operaciones" className={`dock-item ${opTab === 'console' || opTab === 'inside' || opTab === 'history' ? 'active' : ''}`} onClick={() => setOpTab('console')}><Icon name="grid" size={18} /><span>Operaciones</span></button>
           <button aria-label="Usuarios y celdas" className={`dock-item ${opTab === 'users' ? 'active' : ''}`} onClick={() => setOpTab('users')}><Icon name="users" size={18} /><span>Usuarios y celdas</span></button>
           <button aria-label="Pagos" className={`dock-item ${opTab === 'payments' ? 'active' : ''}`} onClick={() => setOpTab('payments')}><Icon name="card" size={18} /><span>Pagos</span></button>
+          {user.rol === 'Administrador' && (
+            <button aria-label="Personal" className={`dock-item ${opTab === 'personal' ? 'active' : ''}`} onClick={() => setOpTab('personal')}><Icon name="shield" size={18} /><span>Personal</span></button>
+          )}
         </div>
-        {/* Solo el administrador puede previsualizar la vista del operario; un operario nunca ve este selector. */}
-        {user.rol === 'Administrador' && <div className="dock-role-switch" aria-label="Vista previa por rol">
-          <button className={roleMode === 'Operario' ? 'active' : ''} onClick={() => setRoleMode('Operario')} type="button">Operario</button>
-          <button className={roleMode === 'Administrador' ? 'active' : ''} onClick={() => setRoleMode('Administrador')} type="button">Administrador</button>
-        </div>}
         <span className="dock-divider" />
-        <button className={`dock-profile ${profileOpen ? 'active' : ''}`} onClick={() => setProfileOpen(!profileOpen)} aria-label="Perfil"><div className="avatar">{initials(user.nombre)}</div><span className={`role-indicator ${user.rol === 'Administrador' ? 'admin' : 'operator'}`} /></button>
+        <div className="dock-user-chip" aria-label="Usuario autenticado">
+          <div className="avatar">{initials(user.nombre)}</div>
+          <div className="dock-user-meta">
+            <strong>{user.nombre}</strong>
+            <span className={`dock-role-badge ${user.rol === 'Administrador' ? 'admin' : 'operator'}`}>
+              {roleLabel(user)}
+            </span>
+          </div>
+        </div>
+        <button type="button" className="dock-logout-btn" onClick={onLogout} aria-label="Cerrar sesión">
+          <Icon name="logout" size={15} />
+          <span>Cerrar sesión</span>
+        </button>
       </nav>
     </div>
 
@@ -426,7 +474,13 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
       setLeaving(true)
       window.setTimeout(() => onLogin(user), 420)
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 401 ? 'Correo o contraseña incorrectos' : errorMessage(err))
+      if (err instanceof ApiError && err.status === 401) {
+        setError('Correo o contraseña incorrectos.')
+      } else if (err instanceof ApiError && err.status === 403) {
+        setError(err.message || 'Tu cuenta se encuentra inactiva. Contacta al Administrador.')
+      } else {
+        setError(errorMessage(err))
+      }
       setSending(false)
     }
   }
@@ -450,13 +504,24 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     </div>
 
     <form className="shift-pod" onSubmit={submit}>
-      <div className="shift-pod-head"><img className="login-logo" src="/logo.svg" alt="PARQUEATE" /><span className="eyebrow">INICIAR TURNO</span><h1>Ingresa a la estación</h1><p>Usa la cuenta de operario o administrador asignada por el parqueadero.</p></div>
+      <div className="shift-pod-head"><img className="login-logo" src="/logo.svg" alt="PARQUEATE" /><span className="eyebrow">PARQUEATE · MEDELLÍN</span><h1>Iniciar sesión</h1><p>Ingresa con tu cuenta de administrador u operario para acceder al sistema.</p></div>
       <div className="login-fields">
-        <label><span>CORREO</span><input type="email" value={correo} onChange={e => setCorreo(e.target.value)} placeholder="operario@autoscolombia.co" autoComplete="username" autoFocus required /></label>
-        <label><span>CONTRASEÑA</span><input type="password" value={contrasena} onChange={e => setContrasena(e.target.value)} placeholder="••••••" autoComplete="current-password" required /></label>
+        <label><span>CORREO ELECTRÓNICO</span><input type="email" value={correo} onChange={e => setCorreo(e.target.value)} placeholder="admin@parqueate.co" autoComplete="username" autoFocus required /></label>
+        <label><span>CONTRASEÑA</span><input type="password" value={contrasena} onChange={e => setContrasena(e.target.value)} placeholder="••••••••" autoComplete="current-password" required /></label>
       </div>
       {error && <div className="notice notice-red login-error"><Icon name="alert" size={16} /><span>{error}</span></div>}
-      <button type="submit" className="unlock-button login-submit" disabled={sending || !correo.trim() || !contrasena}><span>{sending ? 'Verificando…' : 'Iniciar turno'}</span><Icon name="arrow" size={18} /></button>
+      <button type="submit" className="unlock-button login-submit" disabled={sending || !correo.trim() || !contrasena}><span>{sending ? 'Verificando…' : 'Iniciar sesión'}</span><Icon name="arrow" size={18} /></button>
+      <div className="login-seed-note">
+        <span className="login-seed-note-title">Credenciales de prueba</span>
+        <div className="login-seed-item">
+          <span>Administrador:</span>
+          <code>admin@parqueate.co / Admin123*</code>
+        </div>
+        <div className="login-seed-item">
+          <span>Operario:</span>
+          <code>operario@parqueate.co / Operario123*</code>
+        </div>
+      </div>
     </form>
   </div>
 }
@@ -474,8 +539,29 @@ function OperationsHeader({
   cells: CellRecord[]
   onSelectVehicleType: (tipo: VehicleType) => void
 }) {
-  const pageTitle = tab === 'console' ? '¿Qué vehículo quieres registrar?' : tab === 'inside' ? 'Vehículos dentro' : tab === 'history' ? 'Historial y trazabilidad' : tab === 'users' ? 'Usuarios y celdas' : 'Pagos y mensualidades'
-  const pageSubtitle = tab === 'console' ? 'Valida una placa y completa el movimiento en segundos.' : tab === 'inside' || tab === 'history' ? 'Consulta la operación sin salir de la estación.' : tab === 'users' ? 'Gestiona acceso, usuarios y disponibilidad del parqueadero.' : 'Administra pagos, vigencias y recordatorios del servicio.'
+  const pageTitle =
+    tab === 'console'
+      ? '¿Qué vehículo quieres registrar?'
+      : tab === 'inside'
+        ? 'Vehículos dentro'
+        : tab === 'history'
+          ? 'Historial y trazabilidad'
+          : tab === 'users'
+            ? 'Usuarios y celdas'
+            : tab === 'personal'
+              ? 'Personal del sistema'
+              : 'Pagos y mensualidades'
+  const pageSubtitle =
+    tab === 'console'
+      ? 'Valida una placa y completa el movimiento en segundos.'
+      : tab === 'inside' || tab === 'history'
+        ? 'Consulta la operación sin salir de la estación.'
+        : tab === 'users'
+          ? 'Gestiona acceso, usuarios y disponibilidad del parqueadero.'
+          : tab === 'personal'
+            ? 'Administra las cuentas de administradores y operarios con acceso a PARQUEATE.'
+            : 'Administra pagos, vigencias y recordatorios del servicio.'
+  const pageEyebrow = tab === 'personal' ? 'CONTROL DE ACCESO · MEDELLÍN' : 'ESTACIÓN DE ACCESO · MEDELLÍN'
 
   const renderOccupancyHud = () => (
     <div className="occupancy-hud" role="region" aria-label="Resumen de celdas en vivo">
@@ -520,13 +606,13 @@ function OperationsHeader({
     </div>
   )
 
-  if (tab === 'users' || tab === 'payments') {
+  if (tab === 'users' || tab === 'payments' || tab === 'personal') {
     return (
       <>
         {renderOccupancyHud()}
         <div className="page-head spotlight-head compact">
           <div className="title-row">
-            <div><span className="eyebrow">ESTACIÓN DE ACCESO · MEDELLÍN</span><h1>{pageTitle}</h1><p>{pageSubtitle}</p></div>
+            <div><span className="eyebrow">{pageEyebrow}</span><h1>{pageTitle}</h1><p>{pageSubtitle}</p></div>
             <div className="date-chip"><Icon name="clock" size={16} /><span><small>HOY</small>{todayLong()}</span></div>
           </div>
         </div>
@@ -3811,4 +3897,543 @@ function AnnulModal({ ticket, onClose, onDone }: { ticket: Ticket; onClose: () =
     }
   }
   return <Modal title={`Anular ${ticketCode(ticket.id_tiquete)}`} subtitle="Esta acción no elimina el movimiento y quedará en la trazabilidad." onClose={onClose}><div className="modal-body"><div className="notice notice-red"><Icon name="alert" size={18} /><span>La anulación requiere una justificación obligatoria.{ticket.estado === 'Activo' ? ` La celda ${ticket.numero_espacio} quedará libre.` : ''}</span></div><Field label="Justificación"><textarea value={reason} onChange={e => setReason(e.target.value)} rows={4} maxLength={255} placeholder="Explica el motivo de la anulación..." autoFocus /></Field>{error && <div className="notice notice-red"><Icon name="alert" size={16} /><span>{error}</span></div>}</div><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button variant="danger" onClick={confirm} disabled={sending || reason.trim().length < 8}>{sending ? 'Anulando…' : 'Anular registro'}</Button></div></Modal>
+}
+
+// ==============================================================================
+// MÓDULO INDEPENDIENTE: PERSONAL DEL SISTEMA (HU-P14 / RF-A02 — SOLO ADMINISTRADOR)
+// ==============================================================================
+
+function PersonalModule({
+  currentUser,
+  onNotify,
+}: {
+  currentUser: User
+  onNotify: (msg: string) => void
+}) {
+  const [accounts, setAccounts] = useState<StaffAccount[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [roleFilter, setRoleFilter] = useState<'Todos' | StaffRole>('Todos')
+  const [statusFilter, setStatusFilter] = useState<'Todos' | 'Activos' | 'Inactivos'>('Todos')
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null)
+
+  // Modal de Crear / Editar cuenta
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingAccount, setEditingAccount] = useState<StaffAccount | null>(null)
+  const [formNombre, setFormNombre] = useState('')
+  const [formCorreo, setFormCorreo] = useState('')
+  const [formRol, setFormRol] = useState<StaffRole>('Operario')
+  const [formContrasena, setFormContrasena] = useState('')
+  const [formError, setFormError] = useState('')
+  const [formSending, setFormSending] = useState(false)
+
+  // Modal de Activar / Inactivar cuenta con motivo obligatorio
+  const [statusTarget, setStatusTarget] = useState<StaffAccount | null>(null)
+  const [statusMotivo, setStatusMotivo] = useState('')
+  const [statusError, setStatusError] = useState('')
+  const [statusSending, setStatusSending] = useState(false)
+
+  const loadAccounts = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const list = await getStaffAccounts()
+      setAccounts(list)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadAccounts()
+  }, [loadAccounts])
+
+  useEffect(() => {
+    const close = () => setOpenMenuId(null)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [])
+
+  const activeAdminsCount = accounts.filter(
+    (a) => a.rol === 'Administrador' && a.estado === 'Activo',
+  ).length
+
+  const filteredAccounts = accounts.filter((acc) => {
+    if (roleFilter !== 'Todos' && acc.rol !== roleFilter) return false
+    if (statusFilter === 'Activos' && acc.estado !== 'Activo') return false
+    if (statusFilter === 'Inactivos' && acc.estado !== 'Inactivo') return false
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return (
+      acc.nombre.toLowerCase().includes(q) ||
+      acc.correo.toLowerCase().includes(q) ||
+      acc.rol.toLowerCase().includes(q)
+    )
+  })
+
+  const openCreateModal = () => {
+    setEditingAccount(null)
+    setFormNombre('')
+    setFormCorreo('')
+    setFormRol('Operario')
+    setFormContrasena('')
+    setFormError('')
+    setFormOpen(true)
+  }
+
+  const openEditModal = (acc: StaffAccount) => {
+    setEditingAccount(acc)
+    setFormNombre(acc.nombre)
+    setFormCorreo(acc.correo)
+    setFormRol(acc.rol)
+    setFormContrasena('')
+    setFormError('')
+    setFormOpen(true)
+    setOpenMenuId(null)
+  }
+
+  const openStatusModal = (acc: StaffAccount) => {
+    setStatusTarget(acc)
+    setStatusMotivo('')
+    setStatusError('')
+    setOpenMenuId(null)
+  }
+
+  const handleSaveForm = async (e: FormEvent) => {
+    e.preventDefault()
+    const nombreLimpio = formNombre.trim()
+    const correoLimpio = formCorreo.trim().toLowerCase()
+    if (nombreLimpio.length < 3) {
+      setFormError('El nombre completo debe tener al menos 3 caracteres.')
+      return
+    }
+    if (!correoLimpio.includes('@') || !correoLimpio.includes('.')) {
+      setFormError('Ingresa un correo electrónico válido.')
+      return
+    }
+    if (!editingAccount && formContrasena.trim().length < 6) {
+      setFormError('La contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+    if (editingAccount && formContrasena.trim().length > 0 && formContrasena.trim().length < 6) {
+      setFormError('La nueva contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+
+    setFormSending(true)
+    setFormError('')
+    try {
+      if (editingAccount) {
+        const updated = await updateStaffAccount(editingAccount.id, {
+          nombre: nombreLimpio,
+          correo: correoLimpio,
+          rol: formRol,
+          contrasena: formContrasena.trim() ? formContrasena.trim() : null,
+        })
+        setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
+        onNotify(`Cuenta actualizada · ${updated.nombre}`)
+      } else {
+        const created = await createStaffAccount({
+          nombre: nombreLimpio,
+          correo: correoLimpio,
+          rol: formRol,
+          contrasena: formContrasena.trim(),
+        })
+        setAccounts((prev) => [...prev, created])
+        onNotify(`Cuenta creada · ${created.nombre} (${created.rol})`)
+      }
+      setFormOpen(false)
+    } catch (err) {
+      setFormError(errorMessage(err))
+    } finally {
+      setFormSending(false)
+    }
+  }
+
+  const handleConfirmStatus = async () => {
+    if (!statusTarget) return
+    const motivoLimpio = statusMotivo.trim()
+    if (motivoLimpio.length < 5) {
+      setStatusError('El motivo es obligatorio (mínimo 5 caracteres).')
+      return
+    }
+    const nuevoEstado: StaffStatus = statusTarget.estado === 'Activo' ? 'Inactivo' : 'Activo'
+    setStatusSending(true)
+    setStatusError('')
+    try {
+      const updated = await toggleStaffAccountStatus(statusTarget.id, {
+        estado: nuevoEstado,
+        motivo: motivoLimpio,
+      })
+      setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
+      onNotify(
+        `Cuenta ${nuevoEstado === 'Activo' ? 'activada' : 'inactivada'} · ${updated.nombre}`,
+      )
+      setStatusTarget(null)
+    } catch (err) {
+      setStatusError(errorMessage(err))
+    } finally {
+      setStatusSending(false)
+    }
+  }
+
+  return (
+    <section className="module-shell" aria-label="Gestión de cuentas del personal">
+      <div className="module-card">
+        <div className="module-panel">
+          <div className="module-panel-head">
+            <div>
+              <h2>Cuentas del personal</h2>
+              <p style={{ color: '#64748B', fontSize: 13, marginTop: 4 }}>
+                Gestiona los accesos de administradores y operarios (independientes de los clientes del parqueadero).
+              </p>
+            </div>
+            <Button variant="primary" icon="plus" onClick={openCreateModal}>
+              + Nueva cuenta
+            </Button>
+          </div>
+
+          <div className="personal-filters-bar">
+            <div className="search-box wide" style={{ maxWidth: 420 }}>
+              <Icon name="search" size={16} />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por nombre o correo electrónico..."
+                aria-label="Buscar cuenta del personal"
+              />
+            </div>
+
+            <div className="personal-filter-group" role="group" aria-label="Filtrar por rol">
+              <span className="personal-filter-label">Rol:</span>
+              {(['Todos', 'Administrador', 'Operario'] as const).map((rolOption) => (
+                <button
+                  key={rolOption}
+                  type="button"
+                  className={`filter-pill ${roleFilter === rolOption ? 'active' : ''}`}
+                  onClick={() => setRoleFilter(rolOption)}
+                >
+                  {rolOption}
+                </button>
+              ))}
+            </div>
+
+            <div className="personal-filter-group" role="group" aria-label="Filtrar por estado">
+              <span className="personal-filter-label">Estado:</span>
+              {(['Todos', 'Activos', 'Inactivos'] as const).map((stOption) => (
+                <button
+                  key={stOption}
+                  type="button"
+                  className={`filter-pill ${statusFilter === stOption ? 'active' : ''}`}
+                  onClick={() => setStatusFilter(stOption)}
+                >
+                  {stOption}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {error && (
+            <div className="notice notice-red">
+              <Icon name="alert" size={16} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="module-table-wrap">
+            <table className="module-table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Correo</th>
+                  <th>Rol</th>
+                  <th>Estado</th>
+                  <th>Fecha creación</th>
+                  <th style={{ textAlign: 'right' }}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && accounts.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="table-message">
+                      Cargando cuentas del personal…
+                    </td>
+                  </tr>
+                ) : filteredAccounts.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="table-message">
+                      No se encontraron cuentas del personal con los filtros seleccionados.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredAccounts.map((acc) => {
+                    const isLastActiveAdmin =
+                      acc.rol === 'Administrador' &&
+                      acc.estado === 'Activo' &&
+                      activeAdminsCount <= 1
+                    const isMenuOpen = openMenuId === acc.id
+
+                    return (
+                      <tr key={acc.id}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div className="avatar">{initials(acc.nombre)}</div>
+                            <div>
+                              <strong style={{ fontSize: 13.5, color: '#0F172A' }}>
+                                {acc.nombre}
+                              </strong>
+                              {acc.correo.toLowerCase() === currentUser.correo.toLowerCase() && (
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    marginLeft: 6,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    color: '#047857',
+                                    background: '#ECFDF5',
+                                    padding: '2px 7px',
+                                    borderRadius: 999,
+                                  }}
+                                >
+                                  Sesión actual
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12.5, color: '#334155' }}>
+                          {acc.correo}
+                        </td>
+                        <td>
+                          <span
+                            className={`role-pill-badge ${
+                              acc.rol === 'Administrador' ? 'admin' : 'operator'
+                            }`}
+                          >
+                            <Icon
+                              name={acc.rol === 'Administrador' ? 'shield' : 'users'}
+                              size={13}
+                            />
+                            {acc.rol}
+                          </span>
+                        </td>
+                        <td>
+                          <Badge tone={acc.estado === 'Activo' ? 'green' : 'red'}>
+                            {acc.estado}
+                          </Badge>
+                          {acc.estado === 'Inactivo' && acc.motivo_inactivacion && (
+                            <small
+                              style={{
+                                display: 'block',
+                                marginTop: 4,
+                                fontSize: 11,
+                                color: '#991B1B',
+                              }}
+                            >
+                              Motivo: {acc.motivo_inactivacion}
+                            </small>
+                          )}
+                        </td>
+                        <td style={{ fontSize: 12.5, color: '#475569' }}>
+                          {formatDateTime(acc.fecha_creacion)}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <div
+                            className="actions-dropdown-wrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              className={`actions-dropdown-trigger ${isMenuOpen ? 'open' : ''}`}
+                              onClick={() => setOpenMenuId(isMenuOpen ? null : acc.id)}
+                            >
+                              Acciones ▾
+                            </button>
+                            {isMenuOpen && (
+                              <div className="actions-dropdown-menu" role="menu">
+                                <button
+                                  type="button"
+                                  className="actions-dropdown-item"
+                                  onClick={() => openEditModal(acc)}
+                                >
+                                  <Icon name="edit" size={14} />
+                                  Editar datos
+                                </button>
+                                <div className="actions-dropdown-divider" />
+                                <button
+                                  type="button"
+                                  className={`actions-dropdown-item ${
+                                    acc.estado === 'Activo' ? 'danger' : ''
+                                  }`}
+                                  onClick={() => openStatusModal(acc)}
+                                  disabled={isLastActiveAdmin}
+                                  title={
+                                    isLastActiveAdmin
+                                      ? 'No se puede inactivar al último Administrador activo del sistema.'
+                                      : undefined
+                                  }
+                                >
+                                  <Icon
+                                    name={acc.estado === 'Activo' ? 'ban' : 'checkCircle'}
+                                    size={14}
+                                  />
+                                  {acc.estado === 'Activo' ? 'Inactivar cuenta' : 'Activar cuenta'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {formOpen && (
+        <Modal
+          title={editingAccount ? `Editar cuenta · ${editingAccount.nombre}` : 'Nueva cuenta de personal'}
+          subtitle={
+            editingAccount
+              ? 'Actualiza los datos de acceso o asigna una nueva contraseña.'
+              : 'Registra un nuevo administrador u operario con acceso al sistema PARQUEATE.'
+          }
+          onClose={() => setFormOpen(false)}
+        >
+          <form onSubmit={handleSaveForm}>
+            <div className="modal-body">
+              <Field label="Nombre completo">
+                <input
+                  type="text"
+                  value={formNombre}
+                  onChange={(e) => setFormNombre(e.target.value)}
+                  placeholder="Ej. Carlos Andrés Gómez"
+                  required
+                  autoFocus
+                />
+              </Field>
+              <Field label="Correo electrónico">
+                <input
+                  type="email"
+                  value={formCorreo}
+                  onChange={(e) => setFormCorreo(e.target.value)}
+                  placeholder="usuario@parqueate.co"
+                  required
+                />
+              </Field>
+              <Field label="Rol en el sistema">
+                <select
+                  value={formRol}
+                  onChange={(e) => setFormRol(e.target.value as StaffRole)}
+                >
+                  <option value="Operario">Operario</option>
+                  <option value="Administrador">Administrador</option>
+                </select>
+              </Field>
+              <Field
+                label={editingAccount ? 'Nueva contraseña (opcional)' : 'Contraseña'}
+                hint={
+                  editingAccount
+                    ? 'Déjala en blanco si deseas conservar la contraseña actual.'
+                    : 'Mínimo 6 caracteres. Se almacena encriptada con PBKDF2-SHA256.'
+                }
+              >
+                <input
+                  type="password"
+                  value={formContrasena}
+                  onChange={(e) => setFormContrasena(e.target.value)}
+                  placeholder={editingAccount ? 'Sin cambios' : 'Mínimo 6 caracteres'}
+                  required={!editingAccount}
+                />
+              </Field>
+              {formError && (
+                <div className="notice notice-red">
+                  <Icon name="alert" size={16} />
+                  <span>{formError}</span>
+                </div>
+              )}
+            </div>
+            <div className="modal-actions">
+              <Button variant="secondary" onClick={() => setFormOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" variant="primary" disabled={formSending}>
+                {formSending
+                  ? 'Guardando…'
+                  : editingAccount
+                    ? 'Guardar cambios'
+                    : 'Crear cuenta'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {statusTarget && (
+        <Modal
+          title={`${statusTarget.estado === 'Activo' ? 'Inactivar' : 'Activar'} cuenta · ${statusTarget.nombre}`}
+          subtitle={
+            statusTarget.estado === 'Activo'
+              ? 'Una cuenta inactiva no podrá iniciar sesión en PARQUEATE hasta ser reactivada.'
+              : 'La cuenta recuperará el acceso inmediato al sistema con su rol asignado.'
+          }
+          onClose={() => setStatusTarget(null)}
+        >
+          <div className="modal-body">
+            <div className={`notice ${statusTarget.estado === 'Activo' ? 'notice-red' : 'notice-amber'}`}>
+              <Icon name="alert" size={18} />
+              <span>
+                {statusTarget.estado === 'Activo'
+                  ? `Vas a inactivar la cuenta de ${statusTarget.nombre} (${statusTarget.correo}).`
+                  : `Vas a reactivar la cuenta de ${statusTarget.nombre} (${statusTarget.correo}).`}
+              </span>
+            </div>
+            <Field label="Motivo obligatorio">
+              <textarea
+                rows={3}
+                maxLength={240}
+                value={statusMotivo}
+                onChange={(e) => setStatusMotivo(e.target.value)}
+                placeholder={
+                  statusTarget.estado === 'Activo'
+                    ? 'Ej. Fin de turno temporal, vacaciones o retiro del cargo...'
+                    : 'Ej. Reintegro a labores operativas...'
+                }
+                autoFocus
+              />
+            </Field>
+            {statusError && (
+              <div className="notice notice-red">
+                <Icon name="alert" size={16} />
+                <span>{statusError}</span>
+              </div>
+            )}
+          </div>
+          <div className="modal-actions">
+            <Button variant="secondary" onClick={() => setStatusTarget(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant={statusTarget.estado === 'Activo' ? 'danger' : 'primary'}
+              onClick={handleConfirmStatus}
+              disabled={statusSending || statusMotivo.trim().length < 5}
+            >
+              {statusSending
+                ? 'Procesando…'
+                : statusTarget.estado === 'Activo'
+                  ? 'Confirmar inactivación'
+                  : 'Confirmar activación'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </section>
+  )
 }

@@ -11,7 +11,7 @@ from psycopg2 import errors
 from psycopg2.extras import RealDictCursor
 from starlette.status import HTTP_200_OK, HTTP_201_CREATED, HTTP_409_CONFLICT
 
-from auth.auth import get_current_active_user, get_current_admin_user
+from auth.auth import create_access_token, get_current_active_user, get_current_admin_user
 from auth.auth_routes import router as auth_router
 from config import ALLOWED_ORIGINS
 from database.database import DATABASE_URL, get_db
@@ -28,6 +28,7 @@ from models.modulo3_connection import (
     hoy_colombia,
 )
 from models.pago_connection import PagoConnection, calcular_vigencia
+from models.personal_connection import PersonalConnection, ensure_auth_schema
 from models.tarifa_connection import TarifaConnection
 from models.tiquete_connection import TiqueteConnection
 from models.vehiculo_connection import VehiculoConnection
@@ -55,6 +56,14 @@ from schema.modulo3_schema import (
     TarifasModulo3Out,
     VencimientoItemOut,
 )
+from schema.personal_schema import (
+    AuthLoginOut,
+    AuthLoginSchema,
+    CuentaPersonalCrearSchema,
+    CuentaPersonalEditarSchema,
+    CuentaPersonalEstadoSchema,
+    CuentaPersonalOut,
+)
 from schema.tarifa_schema import TarifaOut
 from schema.tipos import EstadoEspacio, TipoVehiculo, normalizar_placa
 from schema.tiquete_schema import AnulacionSchema, CambioEspacioSchema, EntradaOut, EntradaSchema, PlacaSchema, TiqueteOut
@@ -63,6 +72,7 @@ from schema.vehiculo_schema import VehiculoConsultaOut
 
 tags_metadata = [
     {"name": "auth", "description": "Login y emisión del token JWT."},
+    {"name": "Personal", "description": "Gestión de cuentas del personal (Administrador y Operario)."},
     {"name": "Usuarios", "description": "Operario autenticado y gestión de usuarios del parqueadero."},
     {"name": "Vehículos", "description": "Consulta por placa: usuario, mensualidad y si está dentro."},
     {"name": "Espacios", "description": "Celdas del parqueadero y ocupación."},
@@ -78,12 +88,13 @@ logger = logging.getLogger("parqueate")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Ejecuta la migración retrocompatible del Módulo 2 y Módulo 3 al iniciar el servidor."""
+    """Ejecuta la migración retrocompatible del Módulo 2, Módulo 3 y Personal al iniciar el servidor."""
     try:
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
         try:
             ensure_module2_schema(conn)
             ensure_module3_schema(conn)
+            ensure_auth_schema(conn)
         finally:
             conn.close()
     except Exception as exc:
@@ -834,6 +845,70 @@ def anular_pago_modulo3(
 ):
     """HU-P09, RN-P06, RN-P07 (solo Administrador): anula el último pago no anulado de un vehículo y revierte su vigencia."""
     return Modulo3PagoConnection(conn).anular_pago(id_pago, datos, usuario_anulacion=current_user.nombre)
+
+
+# ==============================================================================
+# ENDPOINTS DE AUTENTICACIÓN Y GESTIÓN DE PERSONAL (RF-A01, RF-A02, HU-P13, HU-P14)
+# ==============================================================================
+
+
+@app.post(
+    "/api/auth/login",
+    response_model=AuthLoginOut,
+    status_code=HTTP_200_OK,
+    tags=["auth"],
+)
+def login_personal(datos: AuthLoginSchema, conn=Depends(get_db)):
+    """RF-A01 / HU-P13: Autentica una cuenta de personal (Administrador u Operario), valida estado Activo y retorna JWT."""
+    return PersonalConnection(conn).autenticar_login(datos, create_access_token)
+
+
+@app.get(
+    "/api/personal",
+    response_model=List[CuentaPersonalOut],
+    dependencies=[Depends(get_current_admin_user)],
+    status_code=HTTP_200_OK,
+    tags=["Personal"],
+)
+def listar_cuentas_personal(conn=Depends(get_db)):
+    """RF-A02 / HU-P14 (solo Administrador): Lista todas las cuentas del personal sin exponer contrasena_hash."""
+    return PersonalConnection(conn).listar_personal()
+
+
+@app.post(
+    "/api/personal",
+    response_model=CuentaPersonalOut,
+    dependencies=[Depends(get_current_admin_user)],
+    status_code=HTTP_201_CREATED,
+    tags=["Personal"],
+)
+def crear_cuenta_personal(datos: CuentaPersonalCrearSchema, conn=Depends(get_db)):
+    """RF-A02 / HU-P14 (solo Administrador): Crea una nueva cuenta de personal validando correo único y hasheando contraseña."""
+    return PersonalConnection(conn).crear_personal(datos)
+
+
+@app.put(
+    "/api/personal/{id_cuenta:int}",
+    response_model=CuentaPersonalOut,
+    dependencies=[Depends(get_current_admin_user)],
+    status_code=HTTP_200_OK,
+    tags=["Personal"],
+)
+def editar_cuenta_personal(id_cuenta: int, datos: CuentaPersonalEditarSchema, conn=Depends(get_db)):
+    """RF-A02 / HU-P14 (solo Administrador): Actualiza nombre, correo, rol y opcionalmente contraseña de una cuenta del personal."""
+    return PersonalConnection(conn).editar_personal(id_cuenta, datos)
+
+
+@app.patch(
+    "/api/personal/{id_cuenta:int}/estado",
+    response_model=CuentaPersonalOut,
+    dependencies=[Depends(get_current_admin_user)],
+    status_code=HTTP_200_OK,
+    tags=["Personal"],
+)
+def cambiar_estado_cuenta_personal(id_cuenta: int, datos: CuentaPersonalEstadoSchema, conn=Depends(get_db)):
+    """RF-A02 / HU-P14 (solo Administrador): Activa o inactiva una cuenta del personal exigiendo motivo obligatorio y protegiendo al último Administrador activo."""
+    return PersonalConnection(conn).cambiar_estado_personal(id_cuenta, datos)
 
 
 if __name__ == "__main__":

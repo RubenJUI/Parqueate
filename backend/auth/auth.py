@@ -8,6 +8,7 @@ from passlib.context import CryptContext
 
 from config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
 from database.database import get_db
+from models.personal_connection import verify_password_pbkdf2
 from models.usuario_connection import UsuarioConnection
 from schema.auth_schema import TokenData
 from schema.usuario_schema import UsuarioOut
@@ -17,6 +18,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 
 def verify_password(plain_password: str, contrasena_hash: str) -> bool:
+    if contrasena_hash and contrasena_hash.startswith("pbkdf2_sha256$"):
+        return verify_password_pbkdf2(plain_password, contrasena_hash)
     return pwd_context.verify(plain_password, contrasena_hash)
 
 

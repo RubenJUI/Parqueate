@@ -1,8 +1,8 @@
 // Tipos de los datos que devuelve la API del módulo de entrada y salida.
 
-export type OpTab = 'console' | 'inside' | 'history' | 'users' | 'payments' | 'config'
+export type OpTab = 'console' | 'inside' | 'history' | 'users' | 'payments' | 'personal'
 export type VehicleType = 'Carro' | 'Moto'
-export type Role = 'Administrador' | 'Operador'
+export type Role = 'Administrador' | 'Operador' | 'Operario'
 export type MonthlyStatus = 'Vigente' | 'Por vencer' | 'Vencida'
 export type TicketStatus = 'Activo' | 'Finalizado' | 'Anulado'
 
