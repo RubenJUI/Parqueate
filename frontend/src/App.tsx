@@ -375,7 +375,7 @@ function Operations({
         cells={cells}
         onSelectVehicleType={openCellsMapForType}
       />
-      {fullTypes.length > 0 && <div className="capacity-alert notice-red"><Icon name="alert" size={17} /><span><strong>Sin celdas libres de {fullTypes.map(t => t === 'Carro' ? 'carro' : 'moto').join(' ni de ')}.</strong> {user.rol === 'Administrador' ? 'Con el cupo garantizado esto indica un error de datos: revisa las celdas fuera de servicio y las mensualidades vigentes.' : 'Avisa al administrador.'}</span></div>}
+      {fullTypes.length > 0 && <div className="capacity-alert notice-red"><Icon name="alert" size={17} /><span><strong>Sin celdas libres de {fullTypes.map(t => t === 'Carro' ? 'carro' : 'moto').join(' ni de ')}.</strong> {user.rol === 'Administrador' ? 'Con el cupo garantizado esto indica un error de datos: revisa las celdas fuera de servicio y los vehículos activos.' : 'Avisa al administrador.'}</span></div>}
       <div className="content">
         {opTab === 'console' && <Console cells={cells} payments={payments} onChanged={onChanged} />}
         {opTab === 'inside' && <InsideTable version={version} onChanged={onChanged} />}
@@ -944,32 +944,16 @@ function UsersModule({
     return typeOk && stateOk
   })
 
-  // Conteo de mensualidades vigentes ("Al día" + "Por vencer") por tipo de vehículo (RN-P05 y RN-C05)
+  // Conteo de vehículos activos por tipo de vehículo para cupo garantizado (RN-P05 y RN-C05)
   const activeCarVehiclesCount = users
     .filter((u) => u.estado === 'Activo')
     .reduce((acc, u) => {
-      return (
-        acc +
-        u.vehiculos.filter((v) => {
-          if (v.estado !== 'Activo' || v.tipo !== 'Carro') return false
-          if (payments.length === 0) return true
-          const sub = getVehicleSubscriptionInfo(v.placa, payments)
-          return sub.estado === 'Al día' || sub.estado === 'Por vencer'
-        }).length
-      )
+      return acc + u.vehiculos.filter((v) => v.estado === 'Activo' && v.tipo === 'Carro').length
     }, 0)
   const activeMotoVehiclesCount = users
     .filter((u) => u.estado === 'Activo')
     .reduce((acc, u) => {
-      return (
-        acc +
-        u.vehiculos.filter((v) => {
-          if (v.estado !== 'Activo' || v.tipo !== 'Moto') return false
-          if (payments.length === 0) return true
-          const sub = getVehicleSubscriptionInfo(v.placa, payments)
-          return sub.estado === 'Al día' || sub.estado === 'Por vencer'
-        }).length
-      )
+      return acc + u.vehiculos.filter((v) => v.estado === 'Activo' && v.tipo === 'Moto').length
     }, 0)
 
   const carOccupiedCount = cells.filter((c) => c.tipo === 'Carro' && c.estado === 'Ocupada').length
@@ -1558,7 +1542,7 @@ function UsersModule({
               <strong>
                 Carros: {cells.filter((cell) => cell.tipo === 'Carro' && cell.estado === 'Ocupada').length} ocupadas, {cells.filter((cell) => cell.tipo === 'Carro' && cell.estado === 'Libre').length} libres, {cells.filter((cell) => cell.tipo === 'Carro' && cell.estado === 'Fuera de servicio').length} fuera de servicio de {carTotal || 70}
               </strong>
-              <small>Mensualidades vigentes: {carActiveSubscriptions} · Celdas disponibles (cupo activo): {carAvailable} de {carTotal || 70}</small>
+              <small>Vehículos activos: {carActiveSubscriptions} · Celdas disponibles (cupo activo): {carAvailable} de {carTotal || 70}</small>
             </div>
           </div>
           <div className="module-summary-card">
@@ -1567,7 +1551,7 @@ function UsersModule({
               <strong>
                 Motos: {cells.filter((cell) => cell.tipo === 'Moto' && cell.estado === 'Ocupada').length} ocupadas, {cells.filter((cell) => cell.tipo === 'Moto' && cell.estado === 'Libre').length} libres, {cells.filter((cell) => cell.tipo === 'Moto' && cell.estado === 'Fuera de servicio').length} fuera de servicio de {motoTotal || 10}
               </strong>
-              <small>Mensualidades vigentes: {motoActiveSubscriptions} · Celdas disponibles (cupo activo): {motoAvailable} de {motoTotal || 10}</small>
+              <small>Vehículos activos: {motoActiveSubscriptions} · Celdas disponibles (cupo activo): {motoAvailable} de {motoTotal || 10}</small>
             </div>
           </div>
         </div>
@@ -1669,7 +1653,7 @@ function UsersModule({
                         kind: 'cell',
                         targetId: selectedCell.codigo,
                         title: `Eliminar celda ${selectedCell.codigo}`,
-                        description: `¿Confirmas que deseas eliminar la celda ${selectedCell.codigo} (${selectedCell.tipo}) del inventario del parqueadero? Se validará automáticamente el cupo mínimo garantizado para las mensualidades vigentes.`,
+                        description: `¿Confirmas que deseas eliminar la celda ${selectedCell.codigo} (${selectedCell.tipo}) del inventario del parqueadero? Se validará automáticamente el cupo mínimo garantizado para los vehículos activos.`,
                       })
                     }}
                   >
@@ -2236,19 +2220,12 @@ function PaymentsModule({
   const effectiveMotoTariff = getEffectiveTariffForType('Moto', tariffs)
 
   // Cupo garantizado por tipo de vehículo (RN-P05 y RN-C05):
-  // Cuenta vehículos activos con mensualidad "Al día" o "Por vencer" vs celdas utilizables (Libre + Ocupada)
+  // Las celdas utilizables (Libre + Ocupada, sin contar Fuera de servicio) deben alcanzar para todos los vehículos activos de ese tipo.
   const getActivePaidCountForType = (tipo: VehicleType): number => {
     const fromUsers = users
       .filter((u) => u.estado === 'Activo')
       .reduce((acc, u) => {
-        return (
-          acc +
-          u.vehiculos.filter((v) => {
-            if (v.estado !== 'Activo' || v.tipo !== tipo) return false
-            const sub = getVehicleSubscriptionInfo(v.placa, payments, todayYMD)
-            return sub.estado === 'Al día' || sub.estado === 'Por vencer'
-          }).length
-        )
+        return acc + u.vehiculos.filter((v) => v.estado === 'Activo' && v.tipo === tipo).length
       }, 0)
     const occupied = cells.filter((c) => c.tipo === tipo && c.estado === 'Ocupada').length
     return Math.max(fromUsers, occupied)
@@ -2298,14 +2275,11 @@ function PaymentsModule({
     if (selectedVehicle.estado === 'Inactivo') {
       return `El vehículo de placa ${selectedVehicle.placa} se encuentra en estado Inactivo. El Administrador debe activarlo primero en Usuarios y celdas antes de registrar un pago (RN-P01).`
     }
-    // RN-P05: Las renovaciones de mensualidades aún Vigentes ("Al día") o "Por vencer" siempre se permiten.
-    // Si es primer pago ("Sin mensualidad") o está "Vencida", valida el cupo garantizado.
-    if (selectedSubInfo.estado === 'Sin mensualidad' || selectedSubInfo.estado === 'Vencida') {
-      const vigentesTipo = getActivePaidCountForType(selectedVehicle.tipo)
-      const celdasUtilizables = getUsableCellsCountForType(selectedVehicle.tipo)
-      if (vigentesTipo >= celdasUtilizables) {
-        return `Cupo garantizado completo para ${selectedVehicle.tipo.toLowerCase()}s: ya existen ${vigentesTipo} mensualidades al día para ${celdasUtilizables} celdas utilizables (RN-P05). No se puede activar una nueva mensualidad hasta liberar cupo o habilitar celdas.`
-      }
+    // RN-P05: Las celdas utilizables del tipo deben alcanzar para todos los vehículos activos de ese tipo.
+    const activosTipo = getActivePaidCountForType(selectedVehicle.tipo)
+    const celdasUtilizables = getUsableCellsCountForType(selectedVehicle.tipo)
+    if (activosTipo > celdasUtilizables) {
+      return `No hay cupo garantizado de ${selectedVehicle.tipo} disponible: las celdas utilizables (${celdasUtilizables}) deben alcanzar para todos los vehículos activos (${activosTipo}).`
     }
     return ''
   })()

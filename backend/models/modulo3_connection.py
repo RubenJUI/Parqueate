@@ -584,27 +584,37 @@ class Modulo3PagoConnection:
             dias_cubiertos = 30 * int(datos.meses_pagados)
             fecha_fin = fecha_inicio + timedelta(days=dias_cubiertos - 1)
 
-            # RN-P05: Validar Cupo Garantizado cuando el pago convierte un vehículo en "al día"
-            # (primer pago o renovación de una mensualidad Vencida).
-            if not es_renovacion_al_dia:
-                cur.execute(
-                    """
-                    SELECT COUNT(*) AS utilizables
-                    FROM espacio
-                    WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')
-                    """,
-                    (tipo_v,),
+            # RN-P05: Validar Cupo Garantizado: las celdas utilizables de un tipo (libres u ocupadas,
+            # sin contar las que están fuera de servicio) deben alcanzar para todos los vehículos activos de ese tipo.
+            cur.execute(
+                """
+                SELECT COUNT(*) AS utilizables
+                FROM espacio
+                WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')
+                """,
+                (tipo_v,),
+            )
+            celdas_utilizables = int(cur.fetchone()["utilizables"])
+            cur.execute(
+                """
+                SELECT COUNT(*) AS activos
+                FROM vehiculo v
+                JOIN propietario p ON p.id_propietario = v.id_propietario
+                WHERE v.tipo_vehiculo = %s
+                  AND COALESCE(v.estado, 'Activo') = 'Activo'
+                  AND COALESCE(p.estado, 'Activo') = 'Activo'
+                """,
+                (tipo_v,),
+            )
+            vehiculos_activos = int(cur.fetchone()["activos"])
+            if celdas_utilizables > 0 and vehiculos_activos > celdas_utilizables:
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"No hay cupo garantizado de {tipo_v} disponible: las celdas utilizables ({celdas_utilizables}) "
+                        f"deben alcanzar para todos los vehículos activos ({vehiculos_activos})."
+                    ),
                 )
-                celdas_utilizables = int(cur.fetchone()["utilizables"])
-                clientes_al_dia = self.contar_clientes_al_dia_por_tipo(cur, tipo_v)
-                if celdas_utilizables > 0 and clientes_al_dia >= celdas_utilizables:
-                    raise HTTPException(
-                        status_code=HTTP_400_BAD_REQUEST,
-                        detail=(
-                            f"Cupo garantizado completo para {tipo_v.lower()}s: actualmente hay {clientes_al_dia} "
-                            f"mensualidades al día para {celdas_utilizables} celdas utilizables (RN-P05)."
-                        ),
-                    )
 
             # RN-P08: evitar doble cobro del mismo período
             cur.execute(

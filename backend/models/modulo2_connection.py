@@ -418,6 +418,41 @@ class Modulo2UsuarioConnection:
             (placa, monto),
         )
 
+    def _validar_cupo_vehiculo_nuevo(self, cur, tipo_vehiculo: str) -> None:
+        """Cupo garantizado: las celdas utilizables de un tipo (libres u ocupadas, sin contar las que están
+        fuera de servicio) deben alcanzar para todos los vehículos activos de ese tipo."""
+        cur.execute(
+            """
+            SELECT COUNT(*) AS utilizables
+            FROM espacio
+            WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')
+            """,
+            (tipo_vehiculo,),
+        )
+        utilizables = int(cur.fetchone()["utilizables"])
+        if utilizables == 0:
+            return
+        cur.execute(
+            """
+            SELECT COUNT(*) AS activos
+            FROM vehiculo v
+            JOIN propietario p ON p.id_propietario = v.id_propietario
+            WHERE v.tipo_vehiculo = %s
+              AND COALESCE(v.estado, 'Activo') = 'Activo'
+              AND COALESCE(p.estado, 'Activo') = 'Activo'
+            """,
+            (tipo_vehiculo,),
+        )
+        activos = int(cur.fetchone()["activos"])
+        if activos + 1 > utilizables:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"No hay cupo garantizado de {tipo_vehiculo} disponible: las celdas utilizables ({utilizables}) "
+                    f"deben alcanzar para todos los vehículos activos ({activos + 1})."
+                ),
+            )
+
     def crear_usuario_con_vehiculo(self, datos: UsuarioCrearSchema, usuario_responsable: str) -> dict:
         documento = (datos.documento or "").strip()
         nombres = reparar_mojibake(datos.nombres or "").strip()
@@ -460,6 +495,8 @@ class Modulo2UsuarioConnection:
                     status_code=HTTP_409_CONFLICT,
                     detail=f"La placa {placa} ya está registrada en otro usuario del sistema.",
                 )
+
+            self._validar_cupo_vehiculo_nuevo(cur, datos.tipo)
 
             cur.execute(
                 """
@@ -647,6 +684,11 @@ class Modulo2UsuarioConnection:
                     status_code=HTTP_409_CONFLICT,
                     detail=f"La placa {placa} ya está registrada en el sistema.",
                 )
+
+            cur.execute("SELECT COALESCE(estado, 'Activo') AS estado FROM propietario WHERE id_propietario = %s", (id_propietario,))
+            prop_estado = cur.fetchone()
+            if not prop_estado or prop_estado["estado"] == "Activo":
+                self._validar_cupo_vehiculo_nuevo(cur, datos.tipo)
 
             cur.execute(
                 """
@@ -1064,8 +1106,8 @@ class Modulo2CeldaConnection:
             )
             historial_rows = cur.fetchall()
             vigentes_por_tipo = {
-                "Carro": self._contar_mensualidades_vigentes_reales(cur, "Carro"),
-                "Moto": self._contar_mensualidades_vigentes_reales(cur, "Moto"),
+                "Carro": self._contar_cupo_requerido(cur, "Carro"),
+                "Moto": self._contar_cupo_requerido(cur, "Moto"),
             }
 
         hist_por_celda: Dict[str, List[dict]] = {}
@@ -1195,7 +1237,7 @@ class Modulo2CeldaConnection:
         return celdas[0]
 
     def _contar_cupo_requerido(self, cur, tipo_vehiculo: str) -> int:
-        """Calcula las mensualidades/vehículos activos vigentes para garantizar el cupo de un tipo de celda."""
+        """Calcula los vehículos activos de un tipo para garantizar el cupo de las celdas utilizables."""
         cur.execute(
             """
             SELECT COUNT(*) AS activos
@@ -1221,45 +1263,8 @@ class Modulo2CeldaConnection:
         return max(activos, ocupadas)
 
     def _contar_mensualidades_vigentes_reales(self, cur, tipo_vehiculo: str) -> int:
-        """Alimenta el conteo real de mensualidades vigentes ('Vigente' + 'Por vencer') desde pago_mensualidad."""
-        cur.execute(
-            "SELECT COUNT(*) AS total FROM information_schema.tables WHERE table_name = 'pago_mensualidad'"
-        )
-        if cur.fetchone()["total"] == 0:
-            return self._contar_cupo_requerido(cur, tipo_vehiculo)
-
-        cur.execute("SELECT COUNT(*) AS total FROM pago_mensualidad")
-        if cur.fetchone()["total"] == 0:
-            return self._contar_cupo_requerido(cur, tipo_vehiculo)
-
-        cur.execute(
-            """
-            WITH ultimo_pago AS (
-                SELECT DISTINCT ON (placa_vehiculo)
-                       placa_vehiculo,
-                       fecha_fin_vigencia
-                FROM pago_mensualidad
-                WHERE estado = 'Registrado'
-                ORDER BY placa_vehiculo, id DESC
-            )
-            SELECT COUNT(*) AS al_dia
-            FROM vehiculo v
-            JOIN propietario p ON p.id_propietario = v.id_propietario
-            JOIN ultimo_pago up ON up.placa_vehiculo = v.placa
-            WHERE v.tipo_vehiculo = %s
-              AND COALESCE(v.estado, 'Activo') = 'Activo'
-              AND COALESCE(p.estado, 'Activo') = 'Activo'
-              AND up.fecha_fin_vigencia >= CURRENT_DATE
-            """,
-            (tipo_vehiculo,),
-        )
-        al_dia = int(cur.fetchone()["al_dia"])
-        cur.execute(
-            "SELECT COUNT(*) AS ocupadas FROM espacio WHERE tipo_permitido = %s AND estado = 'Ocupado'",
-            (tipo_vehiculo,),
-        )
-        ocupadas = int(cur.fetchone()["ocupadas"])
-        return max(al_dia, ocupadas)
+        """Retorna el conteo de vehículos activos para mantener compatibilidad con llamadas previas."""
+        return self._contar_cupo_requerido(cur, tipo_vehiculo)
 
     def actualizar_celda(self, codigo: str, datos: CeldaActualizarSchema, usuario_responsable: str) -> dict:
         codigo_norm = (codigo or "").strip().upper()
@@ -1331,8 +1336,8 @@ class Modulo2CeldaConnection:
                             status_code=HTTP_400_BAD_REQUEST,
                             detail=(
                                 f"Cupo garantizado: no se puede poner la celda {codigo_real} en Fuera de servicio "
-                                f"porque quedarían {disponibles - 1} celdas disponibles de {tipo_actual.lower()} "
-                                f"para {cupo_requerido} mensualidades vigentes."
+                                f"porque quedarían {disponibles - 1} celdas utilizables de {tipo_actual.lower()} "
+                                f"para {cupo_requerido} vehículos activos."
                             ),
                         )
                     nuevo_estado_bd = "Mantenimiento"
@@ -1426,8 +1431,8 @@ class Modulo2CeldaConnection:
                         status_code=HTTP_400_BAD_REQUEST,
                         detail=(
                             f"Cupo garantizado: no se puede eliminar la celda {codigo_real} "
-                            f"porque quedarían {disponibles - 1} celdas disponibles de {tipo_actual.lower()} "
-                            f"para {cupo_requerido} mensualidades vigentes."
+                            f"porque quedarían {disponibles - 1} celdas utilizables de {tipo_actual.lower()} "
+                            f"para {cupo_requerido} vehículos activos."
                         ),
                     )
 

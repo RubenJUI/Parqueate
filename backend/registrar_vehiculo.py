@@ -4,8 +4,8 @@ Son precondiciones del módulo de entrada y salida (Iteración 1): esta herramie
 sin necesidad de escribir SQL. Si el propietario o el vehículo ya existen se reutilizan, así
 que volver a ejecutarla con una fecha nueva registra la renovación de la mensualidad.
 
-Cupo garantizado: el pago se rechaza si, en algún día de su vigencia, habría más mensualidades
-vigentes de ese tipo de vehículo que celdas de ese tipo.
+Cupo garantizado: las celdas utilizables de un tipo (libres u ocupadas, sin contar las que están
+fuera de servicio) deben alcanzar para todos los vehículos activos de ese tipo.
 
 Habeas Data (RNF-10, Ley 1581 de 2012): un propietario solo se registra si autorizó el tratamiento
 de sus datos personales; --autoriza-datos deja constancia de esa autorización con su fecha.
@@ -24,7 +24,6 @@ from datetime import date
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from config import DIAS_VIGENCIA
 from database.database import DATABASE_URL
 from models.pago_connection import calcular_vigencia
 from schema.tipos import normalizar_placa
@@ -38,35 +37,33 @@ def error(mensaje: str) -> None:
     raise SystemExit(1)
 
 
-def verificar_cupo(cur, placa: str, tipo: str, fecha_pago: date) -> None:
-    """Precondición de cupo garantizado: las mensualidades vigentes no superan las celdas de cada tipo.
-    Recorre cada día de la vigencia del nuevo pago y cuenta los otros vehículos del mismo tipo con una
-    mensualidad vigente ese día; la placa que se registra suma uno (una renovación no ocupa cupo extra)."""
-    # Serializa los registros de pagos para que dos ejecuciones simultáneas no tomen el mismo cupo.
-    cur.execute("LOCK TABLE pago IN SHARE ROW EXCLUSIVE MODE")
+def verificar_cupo(cur, placa: str, tipo: str, fecha_pago: date = None) -> None:
+    """Precondición de cupo garantizado: las celdas utilizables de un tipo (libres u ocupadas,
+    sin contar las que están fuera de servicio) deben alcanzar para todos los vehículos activos de ese tipo."""
+    # Serializa los registros para que dos ejecuciones simultáneas no tomen el mismo cupo.
+    cur.execute("LOCK TABLE vehiculo IN SHARE ROW EXCLUSIVE MODE")
     cur.execute(
-        "SELECT COUNT(*) AS celdas FROM espacio WHERE tipo_permitido = %s AND estado NOT IN ('Convertida', 'Retirada')",
+        "SELECT COUNT(*) AS celdas FROM espacio WHERE tipo_permitido = %s AND estado IN ('Disponible', 'Ocupado')",
         (tipo,),
     )
     celdas = cur.fetchone()["celdas"]
     cur.execute(
         """
-        SELECT dia::date AS dia,
-               (SELECT COUNT(DISTINCT pg.placa)
-                FROM pago pg JOIN vehiculo v ON v.placa = pg.placa
-                WHERE v.tipo_vehiculo = %(tipo)s AND pg.placa <> %(placa)s
-                  AND pg.fecha_pago BETWEEN dia::date - %(dias)s + 1 AND dia::date) AS otras
-        FROM generate_series(%(fecha)s::date, %(fecha)s::date + %(dias)s - 1, INTERVAL '1 day') AS dia
-        ORDER BY otras DESC, dia
-        LIMIT 1
+        SELECT COUNT(*) AS otros
+        FROM vehiculo v
+        JOIN propietario p ON p.id_propietario = v.id_propietario
+        WHERE v.tipo_vehiculo = %s
+          AND v.placa <> %s
+          AND COALESCE(v.estado, 'Activo') = 'Activo'
+          AND COALESCE(p.estado, 'Activo') = 'Activo'
         """,
-        {"tipo": tipo, "placa": placa, "dias": DIAS_VIGENCIA, "fecha": fecha_pago},
+        (tipo, placa),
     )
-    pico = cur.fetchone()
-    if pico["otras"] + 1 > celdas:
+    otros = cur.fetchone()["otros"]
+    if otros + 1 > celdas:
         error(
-            f"no hay cupo para {tipo}: el {pico['dia']:%d/%m/%Y} ya habría {pico['otras']} mensualidades "
-            f"vigentes para {celdas} celdas de {tipo.lower()}"
+            f"no hay cupo para {tipo}: las celdas utilizables ({celdas}) deben alcanzar "
+            f"para todos los vehículos activos ({otros + 1}) de {tipo.lower()}"
         )
 
 
